@@ -11,7 +11,9 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import * as Contacts from 'expo-contacts/legacy';
 import { supabase } from '../services/supabase';
 
 export default function HomeScreen({ navigation }: any) {
@@ -20,117 +22,138 @@ export default function HomeScreen({ navigation }: any) {
   const [tags, setTags] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [userPhone, setUserPhone] = useState('9999999999');
+  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
 
-  // Default tenant phone (will link with session storage)
-  const currentUserPhone = '9999999999';
-
-  // Load existing tags to provide quick-select suggestion pills
   useEffect(() => {
-    loadExistingTags();
+    AsyncStorage.getItem('user_phone').then((storedPhone) => {
+      if (storedPhone) setUserPhone(storedPhone);
+      fetchSuggestedTags(storedPhone || userPhone);
+    });
   }, []);
 
-  const loadExistingTags = async () => {
+  const fetchSuggestedTags = async (activePhone: string) => {
     try {
       const { data, error } = await supabase
         .from('Contacts_Table')
         .select('Tags')
-        .eq('Userphonenumber', currentUserPhone);
+        .eq('Userphonenumber', activePhone);
 
       if (error) throw error;
 
       if (data) {
-        const uniqueTags = Array.from(
+        const unique = Array.from(
           new Set(
             data
-              .flatMap((item) => (item.Tags ? item.Tags.split(',') : []))
-              .map((t) => t.trim())
-              .filter((t) => t.length > 0)
+              .flatMap((c: any) => (c.Tags ? c.Tags.split(',') : []))
+              .map((t: string) => t.trim())
+              .filter(Boolean)
           )
-        );
-        setAvailableTags(uniqueTags.slice(0, 10)); // Display top 10 unique tags
+        ).slice(0, 8);
+        setSuggestedTags(unique);
       }
-    } catch (err: any) {
-      console.warn('Could not load tags:', err.message);
+    } catch (err) {
+      // Quiet fail for suggestions
     }
   };
 
-  const appendTag = (tagToAdd: string) => {
-    const existingList = tags
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean);
+  const handlePickDeviceContact = async () => {
+    try {
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Permission to access contacts is required to import.');
+        return;
+      }
 
-    if (!existingList.includes(tagToAdd)) {
-      const updated = existingList.length > 0 ? `${existingList.join(', ')}, ${tagToAdd}` : tagToAdd;
-      setTags(`${updated}, `);
+      const contact = await Contacts.presentContactPickerAsync();
+      if (contact) {
+        if (contact.name) {
+          setName(contact.name);
+        }
+
+        if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+          const rawNumber = contact.phoneNumbers[0].number || '';
+          // Clean non-digits
+          const digitsOnly = rawNumber.replace(/\D/g, '');
+          // Extract last 10 digits for Indian mobile numbers
+          const clean10 = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
+          setPhone(clean10);
+        }
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not pick contact');
+    }
+  };
+
+  const handleAddTagSuggestion = (tagToAdd: string) => {
+    if (!tags.trim()) {
+      setTags(tagToAdd);
+    } else {
+      const existing = tags.split(',').map((t) => t.trim());
+      if (!existing.includes(tagToAdd)) {
+        setTags(`${tags}, ${tagToAdd}`);
+      }
     }
   };
 
   const handleSaveContact = async () => {
-    // 1. Validation matching Xamarin checks
     if (!name.trim()) {
       Alert.alert('Alert', 'Please enter Name');
       return;
     }
+
     const cleanPhone = phone.trim();
     if (cleanPhone.length !== 10 || !/^\d{10}$/.test(cleanPhone)) {
       Alert.alert('Alert', 'Phone number must be exactly 10 digits.');
       return;
     }
+
     if (!tags.trim()) {
-      Alert.alert('Alert', 'Please enter Tags');
+      Alert.alert('Alert', 'Please enter at least one Tag');
       return;
     }
 
     setLoading(true);
-
     try {
-      // 2. Check for duplicate phone number
-      const { data: existingUser, error: checkError } = await supabase
+      // Check duplicate
+      const { data: existing, error: checkError } = await supabase
         .from('Contacts_Table')
-        .select('Name')
-        .eq('Phonenumber', cleanPhone)
-        .eq('Userphonenumber', currentUserPhone);
+        .select('id')
+        .eq('Userphonenumber', userPhone)
+        .eq('Phonenumber', cleanPhone);
 
       if (checkError) throw checkError;
 
-      if (existingUser && existingUser.length > 0) {
-        Alert.alert('Notice', `This phone number is already saved as: ${existingUser[0].Name}`);
+      if (existing && existing.length > 0) {
+        Alert.alert('Duplicate Contact', 'A contact with this phone number already exists.');
         setLoading(false);
         return;
       }
 
-      // 3. Format tags (strip trailing comma)
       const sanitizedTags = tags
         .split(',')
         .map((t) => t.trim())
         .filter(Boolean)
         .join(', ');
 
-      // 4. Save to Contacts_Table
       const { error: insertError } = await supabase.from('Contacts_Table').insert([
         {
           Name: name.trim(),
           Phonenumber: cleanPhone,
           Tags: sanitizedTags,
           OtherDetails: notes.trim(),
-          Userphonenumber: currentUserPhone,
+          Userphonenumber: userPhone,
         },
       ]);
 
       if (insertError) throw insertError;
 
       Alert.alert('Success', 'Contact saved successfully!');
-
-      // Reset form
       setName('');
       setPhone('');
       setTags('');
       setNotes('');
-      loadExistingTags();
-
-      // Navigate to Contacts screen
+      fetchSuggestedTags(userPhone);
       navigation.navigate('Contacts');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save contact');
@@ -141,92 +164,86 @@ export default function HomeScreen({ navigation }: any) {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1 }}
+      style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={styles.card}>
-          <Text style={styles.header}>New Contact</Text>
+          <View style={styles.cardHeader}>
+            <Text style={styles.title}>New Contact</Text>
+            <TouchableOpacity
+              style={styles.importBtn}
+              onPress={handlePickDeviceContact}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="people-outline" size={16} color="#2563EB" />
+              <Text style={styles.importBtnText}>Import</Text>
+            </TouchableOpacity>
+          </View>
 
-          {/* Name Field */}
           <Text style={styles.label}>Full Name *</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="person-outline" size={18} color="#64748B" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Rahul Sharma"
-              placeholderTextColor="#94A3B8"
-              value={name}
-              onChangeText={setName}
-            />
-          </View>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. Ramesh Kumar"
+            value={name}
+            onChangeText={setName}
+          />
 
-          {/* Phone Field */}
           <Text style={styles.label}>Phone Number (10 digits) *</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="call-outline" size={18} color="#64748B" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="10 digit mobile number"
-              placeholderTextColor="#94A3B8"
-              keyboardType="numeric"
-              maxLength={10}
-              value={phone}
-              onChangeText={setPhone}
-            />
-          </View>
+          <TextInput
+            style={styles.input}
+            placeholder="10-digit number"
+            keyboardType="numeric"
+            maxLength={10}
+            value={phone}
+            onChangeText={setPhone}
+          />
 
-          {/* Tags Field */}
           <Text style={styles.label}>Tags (comma-separated) *</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="pricetag-outline" size={18} color="#64748B" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Work, Bangalore, VIP"
-              placeholderTextColor="#94A3B8"
-              value={tags}
-              onChangeText={setTags}
-            />
-          </View>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. Client, Bangalore, RealEstate"
+            value={tags}
+            onChangeText={setTags}
+          />
 
-          {/* Existing Tag Chips */}
-          {availableTags.length > 0 && (
-            <View style={styles.chipsRow}>
-              {availableTags.map((tag, idx) => (
-                <TouchableOpacity key={idx} style={styles.chip} onPress={() => appendTag(tag)}>
-                  <Text style={styles.chipText}>+ {tag}</Text>
-                </TouchableOpacity>
-              ))}
+          {suggestedTags.length > 0 && (
+            <View style={styles.suggestionsContainer}>
+              <Text style={styles.suggestionTitle}>Quick Tags:</Text>
+              <View style={styles.suggestionChipsWrap}>
+                {suggestedTags.map((tag, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={styles.suggestionChip}
+                    onPress={() => handleAddTagSuggestion(tag)}
+                  >
+                    <Text style={styles.suggestionChipText}>+ {tag}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           )}
 
-          {/* Notes Field */}
-          <Text style={styles.label}>Notes / Other Details</Text>
-          <View style={[styles.inputWrapper, { height: 90, alignItems: 'flex-start' }]}>
-            <TextInput
-              style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
-              placeholder="Add optional notes or address..."
-              placeholderTextColor="#94A3B8"
-              multiline
-              numberOfLines={3}
-              value={notes}
-              onChangeText={setNotes}
-            />
-          </View>
+          <Text style={styles.label}>Other Details / Notes</Text>
+          <TextInput
+            style={[styles.input, styles.notesInput]}
+            placeholder="Optional details, address, or reminders..."
+            multiline
+            numberOfLines={3}
+            value={notes}
+            onChangeText={setNotes}
+          />
 
-          {/* Submit Button */}
           <TouchableOpacity
-            style={[styles.saveButton, loading && { opacity: 0.7 }]}
+            style={styles.saveButton}
             onPress={handleSaveContact}
             disabled={loading}
+            activeOpacity={0.8}
           >
             {loading ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <View style={styles.saveButtonContent}>
-                <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
-                <Text style={styles.saveButtonText}>Save Contact</Text>
-              </View>
+              <Text style={styles.saveButtonText}>Save Contact</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -236,7 +253,8 @@ export default function HomeScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, backgroundColor: '#F1F5F9', flexGrow: 1 },
+  container: { flex: 1, backgroundColor: '#F1F5F9' },
+  scrollContent: { padding: 16 },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
@@ -246,37 +264,56 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 5,
   },
-  header: { fontSize: 20, fontWeight: '700', color: '#0F172A', marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: '600', color: '#475569', marginTop: 12, marginBottom: 6 },
-  inputWrapper: {
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 8,
-    paddingHorizontal: 12,
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
-  inputIcon: { marginRight: 8 },
-  input: { flex: 1, height: 44, fontSize: 15, color: '#0F172A' },
-  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  chip: {
+  title: { fontSize: 20, fontWeight: '700', color: '#0F172A' },
+  importBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     backgroundColor: '#EEF2FF',
-    borderColor: '#C7D2FE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  importBtnText: { color: '#2563EB', fontSize: 13, fontWeight: '600' },
+  label: { fontSize: 13, fontWeight: '600', color: '#475569', marginTop: 14, marginBottom: 6 },
+  input: {
     borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    height: 46,
+    paddingHorizontal: 12,
+    fontSize: 15,
+    color: '#0F172A',
+    backgroundColor: '#F8FAFC',
+  },
+  notesInput: {
+    height: 80,
+    textAlignVertical: 'top',
+    paddingTop: 10,
+  },
+  suggestionsContainer: { marginTop: 10 },
+  suggestionTitle: { fontSize: 12, color: '#64748B', marginBottom: 6, fontWeight: '500' },
+  suggestionChipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  suggestionChip: {
+    backgroundColor: '#E0E7FF',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 14,
   },
-  chipText: { fontSize: 12, color: '#4338CA', fontWeight: '500' },
+  suggestionChipText: { fontSize: 12, color: '#3730A3', fontWeight: '600' },
   saveButton: {
     backgroundColor: '#2563EB',
-    borderRadius: 8,
     height: 48,
+    borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: 22,
   },
-  saveButtonContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   saveButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
 });

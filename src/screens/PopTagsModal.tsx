@@ -1,122 +1,236 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
+  TextInput,
   FlatList,
   TouchableOpacity,
-  Switch,
   ActivityIndicator,
   StyleSheet,
+  TouchableWithoutFeedback,
+  KeyboardAvoidingView,
+  Platform,
   Alert,
 } from 'react-native';
 import { supabase } from '../services/supabase';
-import { PinnedTag } from '../types';
 
 export default function PopTagsModal({ route, navigation }: any) {
   const userPhone = route.params?.userPhone || '9999999999';
   const onSelectTag = route.params?.onSelectTag;
 
-  const [tags, setTags] = useState<string[]>([]);
-  const [pinned, setPinned] = useState<{ [tag: string]: boolean }>({});
+  const [allTags, setAllTags] = useState<string[]>([]);
+  const [filteredTags, setFilteredTags] = useState<string[]>([]);
+  const [searchFilter, setSearchFilter] = useState('');
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadTags();
-  }, []);
-
-  const loadTags = async () => {
+  const loadTags = useCallback(async () => {
+    setLoading(true);
     try {
-      const { data: contactsData } = await supabase
+      const { data, error } = await supabase
         .from('Contacts_Table')
         .select('Tags')
         .eq('Userphonenumber', userPhone);
 
-      const uniqueTags = Array.from(
-        new Set(
-          (contactsData || [])
-            .flatMap((c) => (c.Tags ? c.Tags.split(',') : []))
-            .map((t) => t.trim())
-            .filter(Boolean)
-        )
-      ).sort();
+      if (error) throw error;
 
-      const { data: pinData } = await supabase
-        .from('PinnedTags')
-        .select('*')
-        .eq('Userphonenumber', userPhone)
-        .eq('Pinned', true);
+      if (data) {
+        const rawTags = data
+          .filter((c: any) => c.Tags && c.Tags.trim().length > 0)
+          .flatMap((c: any) => c.Tags.split(','))
+          .map((t: string) => t.trim())
+          .filter((t: string) => t.length > 0);
 
-      const pinMap: { [key: string]: boolean } = {};
-      (pinData || []).forEach((p: PinnedTag) => {
-        pinMap[p.Tagname] = true;
-      });
+        const uniqueMap = new Map<string, string>();
+        rawTags.forEach((tag: string) => {
+          const lower = tag.toLowerCase();
+          if (!uniqueMap.has(lower)) {
+            uniqueMap.set(lower, tag);
+          }
+        });
 
-      setTags(uniqueTags);
-      setPinned(pinMap);
+        const sortedTags = Array.from(uniqueMap.values()).sort((a, b) =>
+          a.localeCompare(b, undefined, { sensitivity: 'base' })
+        );
+
+        setAllTags(sortedTags);
+        setFilteredTags(sortedTags);
+      }
     } catch (err: any) {
-      Alert.alert('Error', err.message);
+      Alert.alert('Error', err.message || 'Failed to fetch tags');
     } finally {
       setLoading(false);
     }
+  }, [userPhone]);
+
+  useEffect(() => {
+    loadTags();
+  }, [loadTags]);
+
+  const handleTagTextChanged = (text: string) => {
+    setSearchFilter(text);
+    const filter = text.trim().toLowerCase();
+
+    if (!filter) {
+      setFilteredTags(allTags);
+      return;
+    }
+
+    const filtered = allTags.filter((tag) => tag.toLowerCase().includes(filter));
+    setFilteredTags(filtered);
   };
 
-  const togglePin = async (tag: string, currentStatus: boolean) => {
-    const nextStatus = !currentStatus;
-    setPinned((prev) => ({ ...prev, [tag]: nextStatus }));
+  const handleClose = () => {
+    navigation.goBack();
+  };
 
-    try {
-      if (nextStatus) {
-        await supabase.from('PinnedTags').insert([
-          { Userphonenumber: userPhone, Tagname: tag, Pinned: true },
-        ]);
-      } else {
-        await supabase
-          .from('PinnedTags')
-          .delete()
-          .eq('Userphonenumber', userPhone)
-          .eq('Tagname', tag);
-      }
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to update pin state');
+  const handleTagTapped = (tagName: string) => {
+    if (onSelectTag) {
+      onSelectTag(tagName);
     }
+    navigation.goBack();
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Tags Manager</Text>
-      {loading ? (
-        <ActivityIndicator color="#2563EB" style={{ marginTop: 24 }} />
-      ) : (
-        <FlatList
-          data={tags}
-          keyExtractor={(item) => item}
-          renderItem={({ item }) => (
-            <View style={styles.row}>
-              <TouchableOpacity
-                style={styles.tagTextWrapper}
-                onPress={() => {
-                  if (onSelectTag) onSelectTag(item);
-                  navigation.goBack();
-                }}
-              >
-                <Text style={styles.tagName}>{item}</Text>
-              </TouchableOpacity>
-              <Switch
-                value={!!pinned[item]}
-                onValueChange={() => togglePin(item, !!pinned[item])}
-              />
-            </View>
+    <KeyboardAvoidingView
+      style={styles.keyboardContainer}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+    >
+      <View style={styles.backdrop}>
+        <TouchableWithoutFeedback onPress={handleClose}>
+          <View style={styles.backdropTouch} />
+        </TouchableWithoutFeedback>
+
+        <View style={styles.popupFrame}>
+          <View style={styles.headerRow}>
+            <Text style={styles.headerTitle}>Select Tag</Text>
+            <TouchableOpacity
+              onPress={handleClose}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Text style={styles.closeButton}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <TextInput
+            style={styles.searchEntry}
+            placeholder="Enter tag..."
+            placeholderTextColor="#888"
+            value={searchFilter}
+            onChangeText={handleTagTextChanged}
+            autoCapitalize="none"
+          />
+
+          {loading ? (
+            <ActivityIndicator color="#2563EB" style={{ marginTop: 30 }} />
+          ) : (
+            <FlatList
+              data={filteredTags}
+              keyExtractor={(item, index) => `${item}_${index}`}
+              contentContainerStyle={styles.listContent}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.tagFrame}
+                  activeOpacity={0.7}
+                  onPress={() => handleTagTapped(item)}
+                >
+                  <Text style={styles.tagLabel}>{item}</Text>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyText}>No tags found</Text>
+                </View>
+              }
+            />
           )}
-        />
-      )}
-    </View>
+        </View>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF', padding: 20 },
-  title: { fontSize: 20, fontWeight: '700', color: '#0F172A', marginBottom: 16 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#F1F5F9' },
-  tagTextWrapper: { flex: 1 },
-  tagName: { fontSize: 16, color: '#334155', fontWeight: '500' },
+  keyboardContainer: {
+    flex: 1,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: '#80000000',
+    justifyContent: 'flex-end',
+  },
+  backdropTouch: {
+    flex: 1,
+  },
+  popupFrame: {
+    maxHeight: 450,
+    minHeight: 280,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    marginHorizontal: 15,
+    marginBottom: Platform.OS === 'ios' ? 25 : 15,
+    borderRadius: 20,
+    padding: 15,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333333',
+    textAlign: 'center',
+    flex: 1,
+    marginLeft: 24,
+  },
+  closeButton: {
+    fontSize: 22,
+    color: 'red',
+    fontWeight: 'bold',
+    paddingHorizontal: 4,
+  },
+  searchEntry: {
+    height: 45,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontSize: 15,
+    color: '#333333',
+    backgroundColor: '#F8FAFC',
+    marginBottom: 10,
+  },
+  listContent: {
+    paddingBottom: 15,
+  },
+  tagFrame: {
+    backgroundColor: '#F9F9F9',
+    borderRadius: 10,
+    padding: 12,
+    marginVertical: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tagLabel: {
+    fontSize: 16,
+    color: '#222222',
+    fontWeight: '500',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    marginTop: 30,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#94A3B8',
+  },
 });

@@ -40,7 +40,8 @@ export default function ProfileScreen({ navigation }: any) {
           Phonenumber: activePhone,
           Mail_id: 'admin@example.com',
           Login_Access: 'yes',
-        });
+          User_type: 'User',
+        } as UserProfile);
       }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to fetch profile details');
@@ -63,6 +64,9 @@ export default function ProfileScreen({ navigation }: any) {
     ]);
   };
 
+  // Case-insensitive check for Admin role from Userprofile table
+  const isAdmin = (profile as any)?.User_type?.trim().toLowerCase() === 'admin';
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -80,20 +84,28 @@ export default function ProfileScreen({ navigation }: any) {
         <Text style={styles.profileName}>{profile?.Name || 'User'}</Text>
         <Text style={styles.profileSubtitle}>+91 {profile?.Phonenumber}</Text>
 
-        <View style={styles.badgeContainer}>
-          <Ionicons
-            name={profile?.Login_Access === 'yes' ? 'checkmark-circle' : 'alert-circle'}
-            size={16}
-            color={profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626'}
-          />
-          <Text
-            style={[
-              styles.badgeText,
-              { color: profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626' },
-            ]}
-          >
-            {profile?.Login_Access === 'yes' ? 'Access Active' : 'Access Restricted'}
-          </Text>
+        <View style={styles.badgeRow}>
+          <View style={styles.badgeContainer}>
+            <Ionicons
+              name={profile?.Login_Access === 'yes' ? 'checkmark-circle' : 'alert-circle'}
+              size={16}
+              color={profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626'}
+            />
+            <Text
+              style={[
+                styles.badgeText,
+                { color: profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626' },
+              ]}
+            >
+              {profile?.Login_Access === 'yes' ? 'Access Active' : 'Access Restricted'}
+            </Text>
+          </View>
+
+          {isAdmin && (
+            <View style={styles.adminRoleBadge}>
+              <Text style={styles.adminRoleBadgeText}>ADMIN</Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -123,14 +135,17 @@ export default function ProfileScreen({ navigation }: any) {
         </View>
       </View>
 
-      <TouchableOpacity
-        style={styles.adminButton}
-        onPress={() => navigation.navigate('Admin')}
-        activeOpacity={0.8}
-      >
-        <Ionicons name="shield-checkmark-outline" size={20} color="#2563EB" />
-        <Text style={styles.adminText}>Admin User Portal</Text>
-      </TouchableOpacity>
+      {/* Button renders ONLY if User_type === 'Admin' */}
+      {isAdmin && (
+        <TouchableOpacity
+          style={styles.adminButton}
+          onPress={() => navigation.navigate('Admin')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="shield-checkmark-outline" size={20} color="#2563EB" />
+          <Text style={styles.adminText}>Admin User Portal</Text>
+        </TouchableOpacity>
+      )}
 
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
         <Ionicons name="log-out-outline" size={20} color="#DC2626" />
@@ -165,6 +180,7 @@ const styles = StyleSheet.create({
   },
   profileName: { fontSize: 20, fontWeight: '700', color: '#0F172A' },
   profileSubtitle: { fontSize: 14, color: '#64748B', marginTop: 4 },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
   badgeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -173,9 +189,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
-    marginTop: 10,
   },
   badgeText: { fontSize: 12, fontWeight: '600' },
+  adminRoleBadge: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  adminRoleBadgeText: { fontSize: 11, fontWeight: '700', color: '#2563EB' },
   detailsCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 14,

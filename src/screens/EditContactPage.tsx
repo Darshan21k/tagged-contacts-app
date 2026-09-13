@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 
 export default function EditContactPage({ route, navigation }: any) {
-  const { id, userPhone } = route.params;
+  const { id } = route.params;
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -21,6 +21,32 @@ export default function EditContactPage({ route, navigation }: any) {
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerShown: true,
+      headerTitleAlign: 'left',
+      headerShadowVisible: false,
+      headerStyle: {
+        backgroundColor: '#F1F5F9',
+      },
+      headerLeft: () => (
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={styles.backBtn}
+        >
+          <Ionicons name="chevron-back" size={24} color="#0F172A" />
+        </TouchableOpacity>
+      ),
+      headerTitle: () => (
+        <View style={styles.headerTitleRow}>
+          <Text style={styles.headerTitleText}>Edit Contact</Text>
+          <View style={styles.badgeIndicator} />
+        </View>
+      ),
+    });
+  }, [navigation]);
 
   useEffect(() => {
     loadContact();
@@ -108,41 +134,169 @@ export default function EditContactPage({ route, navigation }: any) {
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.label}>Full Name *</Text>
-        <TextInput style={styles.input} value={name} onChangeText={setName} />
+    <View style={styles.screen}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.card}>
+          <Text style={styles.label}>Full Name *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="John Doe"
+            placeholderTextColor="#94A3B8"
+            value={name}
+            onChangeText={setName}
+          />
 
-        <Text style={styles.label}>Phone Number (10 digits) *</Text>
-        <TextInput style={styles.input} keyboardType="numeric" maxLength={10} value={phone} onChangeText={setPhone} />
+          <Text style={styles.label}>Phone Number (10 digits) *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="9876543210"
+            placeholderTextColor="#94A3B8"
+            keyboardType="numeric"
+            maxLength={10}
+            value={phone}
+            onChangeText={setPhone}
+          />
 
-        <Text style={styles.label}>Tags (comma-separated) *</Text>
-        <TextInput style={styles.input} value={tags} onChangeText={setTags} />
+          <Text style={styles.label}>Tags (comma-separated) *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Work, Client, Vendor"
+            placeholderTextColor="#94A3B8"
+            value={tags}
+            onChangeText={setTags}
+          />
 
-        <Text style={styles.label}>Notes</Text>
-        <TextInput style={[styles.input, styles.notes]} multiline numberOfLines={3} value={notes} onChangeText={setNotes} />
+          <Text style={styles.label}>Notes</Text>
+          <TextInput
+            style={[styles.input, styles.notes]}
+            placeholder="Add any extra details or remarks..."
+            placeholderTextColor="#94A3B8"
+            multiline
+            numberOfLines={3}
+            value={notes}
+            onChangeText={setNotes}
+          />
 
-        <TouchableOpacity style={styles.saveBtn} onPress={handleUpdate} disabled={saving}>
-          {saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnText}>Update Contact</Text>}
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.saveBtn} onPress={handleUpdate} disabled={saving}>
+            {saving ? (
+              <ActivityIndicator color="#FFF" />
+            ) : (
+              <View style={styles.btnRow}>
+                <Ionicons name="checkmark-circle-outline" size={20} color="#FFF" />
+                <Text style={styles.btnText}>Update Contact</Text>
+              </View>
+            )}
+          </TouchableOpacity>
 
-        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} disabled={saving}>
-          <Text style={styles.deleteBtnText}>Delete Contact</Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+          <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} disabled={saving}>
+            <View style={styles.btnRow}>
+              <Ionicons name="trash-outline" size={18} color="#DC2626" />
+              <Text style={styles.deleteBtnText}>Delete Contact</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F1F5F9', padding: 16 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  card: { backgroundColor: '#FFF', padding: 20, borderRadius: 14, elevation: 2 },
-  label: { fontSize: 13, fontWeight: '600', color: '#475569', marginTop: 12, marginBottom: 6 },
-  input: { borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 8, height: 44, paddingHorizontal: 12 },
-  notes: { height: 80, textAlignVertical: 'top', paddingTop: 8 },
-  saveBtn: { backgroundColor: '#2563EB', height: 48, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginTop: 24 },
-  deleteBtn: { backgroundColor: '#FEE2E2', height: 48, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginTop: 12 },
-  btnText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
-  deleteBtnText: { color: '#DC2626', fontWeight: '600', fontSize: 15 },
+  screen: { flex: 1, backgroundColor: '#F1F5F9' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F1F5F9' },
+  backBtn: {
+    marginRight: 6,
+    padding: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  headerTitleText: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.4,
+    includeFontPadding: false,
+  },
+  badgeIndicator: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#2563EB',
+    marginTop: 2,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 32,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 14,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    height: 46,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: '#0F172A',
+    backgroundColor: '#F8FAFC',
+  },
+  notes: {
+    height: 84,
+    textAlignVertical: 'top',
+    paddingTop: 10,
+  },
+  saveBtn: {
+    backgroundColor: '#2563EB',
+    height: 48,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 22,
+  },
+  deleteBtn: {
+    backgroundColor: '#FEE2E2',
+    height: 48,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  btnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  btnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  deleteBtnText: {
+    color: '#DC2626',
+    fontWeight: '700',
+    fontSize: 15,
+  },
 });
