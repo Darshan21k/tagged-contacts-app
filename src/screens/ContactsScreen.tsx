@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,32 +16,97 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
 import { Contact } from '../types';
 
-export default function ContactsScreen({ navigation }: any) {
-  const [contacts, setContacts] = useState<Contact[]>([]);
+interface ContactCardProps {
+  item: Contact;
+  onPress: () => void;
+  onCall: (phone: string) => void;
+  onWhatsApp: (phone: string) => void;
+}
+
+const ContactCard = React.memo(({ item, onPress, onCall, onWhatsApp }: ContactCardProps) => {
+  const tagList = item.Tags
+    ? item.Tags.split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .sort((a, b) => a.length - b.length || a.localeCompare(b))
+    : [];
+
+  return (
+    <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={onPress}>
+      <View style={styles.cardHeaderRow}>
+        <View style={styles.headerInfo}>
+          <Text style={styles.nameText} numberOfLines={1}>
+            {item.Name}
+          </Text>
+          <TouchableOpacity onPress={() => onCall(item.Phonenumber)} activeOpacity={0.7}>
+            <View style={styles.phoneRow}>
+              <Ionicons name="call-outline" size={15} color="#2563EB" />
+              <Text style={styles.phoneText}>+91 {item.Phonenumber}</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.actionButtons}>
+          <TouchableOpacity
+            style={[styles.iconButton, styles.whatsappButton]}
+            onPress={() => onWhatsApp(item.Phonenumber)}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <Ionicons name="logo-whatsapp" size={18} color="#FFFFFF" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.iconButton, styles.callButton]}
+            onPress={() => onCall(item.Phonenumber)}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <Ionicons name="call" size={17} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {tagList.length > 0 && (
+        <View style={styles.tagContainer}>
+          {tagList.map((tag, index) => (
+            <View key={index} style={styles.tagPill}>
+              <Text style={styles.tagText}>{tag}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {item.OtherDetails ? (
+        <Text style={styles.detailsText} numberOfLines={2}>
+          {item.OtherDetails}
+        </Text>
+      ) : null}
+    </TouchableOpacity>
+  );
+});
+
+export default function ContactsScreen({ navigation, route }: any) {
+  const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [pinnedTags, setPinnedTags] = useState<string[]>([]);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
-  const [totalCount, setTotalCount] = useState(0);
   const [userPhone, setUserPhone] = useState('9999999999');
-
-  const selectedTagRef = useRef<string | null>(null);
-  const searchQueryRef = useRef<string>('');
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    selectedTagRef.current = selectedTag;
-  }, [selectedTag]);
-
-  useEffect(() => {
-    searchQueryRef.current = searchQuery;
-  }, [searchQuery]);
 
   useEffect(() => {
     AsyncStorage.getItem('user_phone').then((phone) => {
       if (phone) setUserPhone(phone);
     });
   }, []);
+
+  // Catches tag passed via route params and puts it into search bar
+  useEffect(() => {
+    if (route.params?.selectedTag !== undefined) {
+      const chosenTag = route.params.selectedTag ? route.params.selectedTag.trim() : '';
+      setSelectedTag(chosenTag || null);
+      setSearchQuery(chosenTag);
+      navigation.setParams({ selectedTag: undefined });
+    }
+  }, [route.params?.selectedTag, navigation]);
 
   const fetchPinnedTags = useCallback(async (activePhone: string) => {
     try {
@@ -60,122 +125,98 @@ export default function ContactsScreen({ navigation }: any) {
     }
   }, []);
 
-  const fetchContactsData = useCallback(
-    async (tagFilter: string | null, textFilter: string) => {
-      setLoading(true);
-      try {
-        const activePhone = (await AsyncStorage.getItem('user_phone')) || userPhone;
-        let query = supabase
-          .from('Contacts_Table')
-          .select('*')
-          .eq('Userphonenumber', activePhone);
+  const fetchContactsData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const activePhone = (await AsyncStorage.getItem('user_phone')) || userPhone;
+      const { data, error } = await supabase
+        .from('Contacts_Table')
+        .select('*')
+        .eq('Userphonenumber', activePhone)
+        .order('Name', { ascending: true });
 
-        if (tagFilter && tagFilter.trim()) {
-          query = query.ilike('Tags', `%${tagFilter.trim()}%`);
-        }
-
-        const cleanText = (textFilter || '').trim();
-        if (cleanText) {
-          const isNumeric = /^\d+$/.test(cleanText);
-          if (isNumeric) {
-            query = query.ilike('Phonenumber', `%${cleanText}%`);
-          } else {
-            const sanitized = cleanText.replace(/[%_,()]/g, '');
-            if (sanitized) {
-              query = query.or(`Name.ilike.%${sanitized}%,Tags.ilike.%${sanitized}%`);
-            }
-          }
-        }
-
-        const { data, error } = await query.order('Name', { ascending: true });
-        if (error) throw error;
-
-        const loaded = data || [];
-        setContacts(loaded);
-        setTotalCount(loaded.length);
-      } catch (err: any) {
-        Alert.alert('Error', err.message || 'Failed to fetch contacts');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [userPhone]
-  );
+      if (error) throw error;
+      setAllContacts(data || []);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to fetch contacts');
+    } finally {
+      setLoading(false);
+    }
+  }, [userPhone]);
 
   useFocusEffect(
     useCallback(() => {
       const run = async () => {
         const storedPhone = await AsyncStorage.getItem('user_phone');
         fetchPinnedTags(storedPhone || userPhone);
-        fetchContactsData(selectedTagRef.current, searchQueryRef.current);
+        fetchContactsData();
       };
       run();
     }, [userPhone, fetchPinnedTags, fetchContactsData])
   );
 
-  const handleSearchChange = (text: string) => {
-    setSearchQuery(text);
-    searchQueryRef.current = text;
+  // Single unified filter logic
+  const filteredContacts = useMemo(() => {
+    let result = allContacts;
 
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
+    if (selectedTag && selectedTag.trim()) {
+      const tagLower = selectedTag.trim().toLowerCase();
+      result = result.filter((c) => (c.Tags || '').toLowerCase().includes(tagLower));
+    } else if (searchQuery.trim()) {
+      const query = searchQuery.trim().toLowerCase();
+      result = result.filter((c) => {
+        const nameMatch = (c.Name || '').toLowerCase().includes(query);
+        const phoneMatch = (c.Phonenumber || '').includes(query);
+        const tagsMatch = (c.Tags || '').toLowerCase().includes(query);
+        return nameMatch || phoneMatch || tagsMatch;
+      });
     }
 
-    searchTimeoutRef.current = setTimeout(() => {
-      fetchContactsData(selectedTagRef.current, text);
-    }, 350);
-  };
+    return result;
+  }, [allContacts, selectedTag, searchQuery]);
 
-  const handleTagPress = (tag: string | null) => {
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
+  // Pinned tag press: replaces search bar text with tag, or clears if toggled off
+  const handleTagPress = useCallback((tag: string | null) => {
+    if (!tag) {
+      setSelectedTag(null);
+      setSearchQuery('');
+      return;
     }
 
-    const nextTag = selectedTagRef.current === tag ? null : tag;
+    setSelectedTag((prev) => {
+      if (prev === tag) {
+        setSearchQuery('');
+        return null;
+      } else {
+        setSearchQuery(tag);
+        return tag;
+      }
+    });
+  }, []);
 
-    selectedTagRef.current = nextTag;
-    searchQueryRef.current = '';
-    setSelectedTag(nextTag);
-    setSearchQuery('');
-
-    fetchContactsData(nextTag, '');
-  };
-
-  const openTagsModal = () => {
+  // Modal tag select: replaces search bar text with selected tag
+  const openTagsModal = useCallback(() => {
     navigation.navigate('PopTags', {
       userPhone,
       onSelectTag: (tagResult: string) => {
-        if (searchTimeoutRef.current) {
-          clearTimeout(searchTimeoutRef.current);
-        }
-
         const chosenTag = tagResult ? tagResult.trim() : '';
-
-        selectedTagRef.current = null;
-        searchQueryRef.current = chosenTag;
-        setSelectedTag(null);
+        setSelectedTag(chosenTag || null);
         setSearchQuery(chosenTag);
-
-        fetchContactsData(null, chosenTag);
       },
     });
-  };
+  }, [navigation, userPhone]);
 
-  const handleClearSearch = () => {
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
-    searchQueryRef.current = '';
+  const handleClearSearch = useCallback(() => {
     setSearchQuery('');
-    fetchContactsData(selectedTagRef.current, '');
-  };
+    setSelectedTag(null);
+  }, []);
 
-  const handleCall = (phoneNumber: string) => {
+  const handleCall = useCallback((phoneNumber: string) => {
     const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
     if (cleanNumber) Linking.openURL(`tel:+91${cleanNumber}`);
-  };
+  }, []);
 
-  const handleWhatsApp = (phoneNumber: string) => {
+  const handleWhatsApp = useCallback((phoneNumber: string) => {
     const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
     if (!cleanNumber) return;
     const url = `https://wa.me/91${cleanNumber}`;
@@ -186,173 +227,129 @@ export default function ContactsScreen({ navigation }: any) {
         Alert.alert('Error', 'WhatsApp is not installed on this device.');
       }
     });
-  };
+  }, []);
 
-  // 1. Top Section: Scrolls off-screen as the user scrolls up
-  const renderScrollableHeader = () => (
-    <View style={styles.scrollableHeaderContainer}>
-      <View style={styles.searchSection}>
-        <Ionicons name="search" size={20} color="#94A3B8" style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search Name, Phone, or Tag..."
-          placeholderTextColor="#94A3B8"
-          value={searchQuery}
-          onChangeText={handleSearchChange}
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={handleClearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close-circle" size={18} color="#94A3B8" />
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={openTagsModal} style={styles.tagFilterBtn}>
-          <Ionicons name="pricetags" size={20} color="#2563EB" />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.tagsWindowCard}>
-        <View style={styles.tagsWindowHeader}>
-          <View style={styles.tagsTitleRow}>
-            <Ionicons name="pin" size={16} color="#2563EB" />
-            <Text style={styles.tagsTitleText}>Tags</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.settingsIconBtn}
-            onPress={() => navigation.navigate('ManageTags', { userPhone })}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Ionicons name="settings-outline" size={17} color="#64748B" />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.tagsWrapContainer}>
-          <TouchableOpacity
-            style={[styles.tagBadge, selectedTag === null && searchQuery === '' && styles.tagBadgeActive]}
-            onPress={() => handleTagPress(null)}
-          >
-            <Text
-              style={[
-                styles.tagBadgeText,
-                selectedTag === null && searchQuery === '' && styles.tagBadgeTextActive,
-              ]}
-            >
-              All
-            </Text>
-          </TouchableOpacity>
-
-          {pinnedTags.map((tag, idx) => {
-            const isActive = selectedTag === tag;
-            return (
-              <TouchableOpacity
-                key={idx}
-                style={[styles.tagBadge, isActive && styles.tagBadgeActive]}
-                onPress={() => handleTagPress(tag)}
-              >
-                <Text
-                  style={[
-                    styles.tagBadgeText,
-                    isActive && styles.tagBadgeTextActive,
-                  ]}
-                >
-                  {tag}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
-    </View>
-  );
-
-  // 2. Sticky Bar: Stops at the very top and remains pinned while contacts scroll under it
-  const renderStickySectionHeader = () => (
-    <View style={styles.stickyBar}>
-      <Text style={styles.counterText}>
-        Total Contacts: {totalCount}
-        {selectedTag ? ` (Tag: ${selectedTag})` : searchQuery ? ` (Filtered by: "${searchQuery}")` : ''}
-      </Text>
-    </View>
-  );
-
-  // 3. Contact Cards
-  const renderContactCard = ({ item }: { item: Contact }) => {
-    const tagList = item.Tags
-      ? item.Tags.split(',')
-          .map((t) => t.trim())
-          .filter(Boolean)
-          .sort((a, b) => a.length - b.length || a.localeCompare(b))
-      : [];
-
-    return (
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.8}
+  const renderContactCard = useCallback(
+    ({ item }: { item: Contact }) => (
+      <ContactCard
+        item={item}
         onPress={() => navigation.navigate('EditContact', { id: item.id, userPhone })}
-      >
-        <View style={styles.cardHeaderRow}>
-          <View style={styles.headerInfo}>
-            <Text style={styles.nameText} numberOfLines={1}>{item.Name}</Text>
+        onCall={handleCall}
+        onWhatsApp={handleWhatsApp}
+      />
+    ),
+    [navigation, userPhone, handleCall, handleWhatsApp]
+  );
 
-            <TouchableOpacity onPress={() => handleCall(item.Phonenumber)} activeOpacity={0.7}>
-              <View style={styles.phoneRow}>
-                <Ionicons name="call-outline" size={15} color="#2563EB" />
-                <Text style={styles.phoneText}>+91 {item.Phonenumber}</Text>
-              </View>
+  const ListHeader = useMemo(() => {
+    return (
+      <View style={styles.scrollableHeaderContainer}>
+        <View style={styles.searchSection}>
+          <Ionicons name="search" size={20} color="#94A3B8" style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search Name, Phone, or Tag..."
+            placeholderTextColor="#94A3B8"
+            value={searchQuery}
+            onChangeText={(text) => {
+              setSearchQuery(text);
+              // If user changes text manually, clear the badge selection
+              if (selectedTag && text !== selectedTag) {
+                setSelectedTag(null);
+              }
+            }}
+            autoCorrect={false}
+            clearButtonMode="never"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={handleClearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="close-circle" size={18} color="#94A3B8" />
             </TouchableOpacity>
-          </View>
-
-          <View style={styles.actionButtons}>
-            <TouchableOpacity
-              style={[styles.iconButton, styles.whatsappButton]}
-              onPress={() => handleWhatsApp(item.Phonenumber)}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons name="logo-whatsapp" size={18} color="#FFFFFF" />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.iconButton, styles.callButton]}
-              onPress={() => handleCall(item.Phonenumber)}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons name="call" size={17} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
+          )}
+          <TouchableOpacity onPress={openTagsModal} style={styles.tagFilterBtn}>
+            <Ionicons name="pricetags" size={20} color="#2563EB" />
+          </TouchableOpacity>
         </View>
 
-        {tagList.length > 0 && (
-          <View style={styles.tagContainer}>
-            {tagList.map((tag, index) => (
-              <View key={index} style={styles.tagPill}>
-                <Text style={styles.tagText}>{tag}</Text>
-              </View>
-            ))}
+        <View style={styles.tagsWindowCard}>
+          <View style={styles.tagsWindowHeader}>
+            <View style={styles.tagsTitleRow}>
+              <Ionicons name="pin" size={16} color="#2563EB" />
+              <Text style={styles.tagsTitleText}>Tags</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.settingsIconBtn}
+              onPress={() => navigation.navigate('ManageTags', { userPhone })}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="settings-outline" size={17} color="#64748B" />
+            </TouchableOpacity>
           </View>
-        )}
 
-        {item.OtherDetails ? (
-          <Text style={styles.detailsText} numberOfLines={2}>
-            {item.OtherDetails}
-          </Text>
-        ) : null}
-      </TouchableOpacity>
+          <View style={styles.tagsWrapContainer}>
+            <TouchableOpacity
+              style={[styles.tagBadge, selectedTag === null && searchQuery === '' && styles.tagBadgeActive]}
+              onPress={() => handleTagPress(null)}
+            >
+              <Text
+                style={[
+                  styles.tagBadgeText,
+                  selectedTag === null && searchQuery === '' && styles.tagBadgeTextActive,
+                ]}
+              >
+                All
+              </Text>
+            </TouchableOpacity>
+
+            {pinnedTags.map((tag, idx) => {
+              const isActive = selectedTag === tag;
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={[styles.tagBadge, isActive && styles.tagBadgeActive]}
+                  onPress={() => handleTagPress(tag)}
+                >
+                  <Text style={[styles.tagBadgeText, isActive && styles.tagBadgeTextActive]}>
+                    {tag}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </View>
     );
-  };
+  }, [searchQuery, selectedTag, pinnedTags, userPhone, navigation, handleClearSearch, openTagsModal, handleTagPress]);
+
+  const renderStickySectionHeader = useCallback(() => {
+    return (
+      <View style={styles.stickyBar}>
+        <Text style={styles.counterText}>
+          Total Contacts: {filteredContacts.length}
+          {searchQuery ? ` (Tag: "${searchQuery}")` : ''}
+        </Text>
+      </View>
+    );
+  }, [filteredContacts.length, searchQuery]);
 
   return (
     <View style={styles.container}>
-      {loading && contacts.length === 0 ? (
+      {loading && allContacts.length === 0 ? (
         <ActivityIndicator size="large" color="#2563EB" style={{ marginTop: 60 }} />
       ) : (
         <SectionList
-          sections={[{ title: 'contacts', data: contacts }]}
+          sections={[{ title: 'contacts', data: filteredContacts }]}
           keyExtractor={(item, index) => (item?.id ? item.id.toString() : index.toString())}
           renderItem={renderContactCard}
+          ListHeaderComponent={ListHeader}
           renderSectionHeader={renderStickySectionHeader}
-          ListHeaderComponent={renderScrollableHeader}
           stickySectionHeadersEnabled={true}
           contentContainerStyle={styles.listContent}
           keyboardShouldPersistTaps="handled"
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          removeClippedSubviews={true}
           ListEmptyComponent={
             !loading ? (
               <View style={styles.emptyContainer}>
@@ -450,7 +447,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
-    marginBottom: 10,
+    marginBottom: 6,
   },
   counterText: {
     fontSize: 13,

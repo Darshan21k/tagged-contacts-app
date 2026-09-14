@@ -7,6 +7,12 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
+  Image,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
@@ -154,69 +160,166 @@ export default function LoginPage({ navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.title}>Contact Now</Text>
-        <Text style={styles.subtitle}>Sign in to access your tagged contacts</Text>
+    <KeyboardAvoidingView
+      style={styles.keyboardView}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Custom App Logo above frame */}
+          <View style={styles.logoWrapper}>
+            <Image
+              
+              source={require('../../assets/icon.png')}
+              style={styles.appLogo}
+              resizeMode="contain"
+            />
+          </View>
 
-        <Text style={styles.label}>Mobile Number (10 digits)</Text>
-        <TextInput
-          style={[styles.input, isOtpSent && styles.disabledInput]}
-          placeholder="Enter 10-digit number"
-          keyboardType="numeric"
-          maxLength={10}
-          value={mobileNumber}
-          editable={!isOtpSent}
-          onChangeText={setMobileNumber}
-        />
+          <View style={styles.card}>
+            <Text style={styles.title}>Contact Now</Text>
+            <Text style={styles.subtitle}>Sign In / Sign Up using mobile number</Text>
 
-        {isOtpSent && (
-          <>
-            <Text style={styles.label}>Email OTP</Text>
+            <Text style={styles.label}>Mobile Number (10 digits)</Text>
             <TextInput
-              style={styles.input}
-              placeholder="Enter 6-digit OTP"
+              style={[styles.input, isOtpSent && styles.disabledInput]}
+              placeholder="Enter 10-digit number"
               keyboardType="numeric"
-              value={otp}
-              onChangeText={setOtp}
+              maxLength={10}
+              value={mobileNumber}
+              editable={!isOtpSent}
+              onChangeText={setMobileNumber}
             />
 
-            {countdown > 0 ? (
-              <Text style={styles.resendText}>Resend OTP in {countdown}s</Text>
-            ) : (
-              <TouchableOpacity onPress={() => sendEmailOtp(mailId)}>
-                <Text style={styles.resendBtn}>Resend OTP</Text>
-              </TouchableOpacity>
-            )}
-          </>
-        )}
+            {isOtpSent && (
+              <>
+                <Text style={styles.label}>Email OTP</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter 6-digit OTP"
+                  keyboardType="numeric"
+                  value={otp}
+                  onChangeText={setOtp}
+                />
 
-        <TouchableOpacity
-          style={styles.button}
-          onPress={isOtpSent ? handleVerifyOtp : handleVerifyPhone}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.buttonText}>{isOtpSent ? 'Verify OTP' : 'Continue'}</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </View>
+                {countdown > 0 ? (
+                  <Text style={styles.resendText}>Resend OTP in {countdown}s</Text>
+                ) : (
+                  <TouchableOpacity onPress={() => sendEmailOtp(mailId)}>
+                    <Text style={styles.resendBtn}>Resend OTP</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+
+            <TouchableOpacity
+              style={styles.button}
+              onPress={isOtpSent ? handleVerifyOtp : handleVerifyPhone}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.buttonText}>{isOtpSent ? 'Verify OTP' : 'Continue'}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </TouchableWithoutFeedback>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F1F5F9', justifyContent: 'center', padding: 20 },
-  card: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 16, elevation: 3 },
-  title: { fontSize: 24, fontWeight: '700', color: '#1E293B', textAlign: 'center' },
-  subtitle: { fontSize: 14, color: '#64748B', textAlign: 'center', marginBottom: 24, marginTop: 4 },
-  label: { fontSize: 13, fontWeight: '600', color: '#475569', marginBottom: 6, marginTop: 12 },
-  input: { borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 8, height: 48, paddingHorizontal: 12, fontSize: 16 },
-  disabledInput: { backgroundColor: '#F1F5F9', color: '#94A3B8' },
-  resendText: { fontSize: 13, color: '#64748B', marginTop: 8, textAlign: 'center' },
-  resendBtn: { fontSize: 13, color: '#2563EB', fontWeight: '600', marginTop: 8, textAlign: 'center' },
-  button: { backgroundColor: '#2563EB', height: 48, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginTop: 24 },
-  buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  keyboardView: {
+    flex: 1,
+    backgroundColor: '#F1F5F9',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  logoWrapper: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  appLogo: {
+    width: 84,
+    height: 84,
+    borderRadius: 18,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    padding: 24,
+    borderRadius: 16,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1E293B',
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 20,
+    marginTop: 4,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+    marginBottom: 6,
+    marginTop: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    height: 48,
+    paddingHorizontal: 12,
+    fontSize: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  disabledInput: {
+    backgroundColor: '#F1F5F9',
+    color: '#94A3B8',
+  },
+  resendText: {
+    fontSize: 13,
+    color: '#64748B',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  resendBtn: {
+    fontSize: 13,
+    color: '#2563EB',
+    fontWeight: '600',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  button: {
+    backgroundColor: '#2563EB',
+    height: 48,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });
