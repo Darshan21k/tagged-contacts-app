@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Keyboard,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,11 +29,12 @@ export default function HomeScreen({ navigation }: any) {
   const [mostUsedTags, setMostUsedTags] = useState<string[]>([]);
   const [recentTags, setRecentTags] = useState<string[]>([]);
   const [tagTab, setTagTab] = useState<'most' | 'recent'>('most');
+  const [allAvailableTags, setAllAvailableTags] = useState<string[]>([]);
+  const [tagSectionY, setTagSectionY] = useState(0);
 
   const scrollViewRef = useRef<ScrollView>(null);
   const tagSectionRef = useRef<View>(null);
 
-  // Resets the entire form and reloads fresh tag suggestions whenever this screen comes into focus
   useFocusEffect(
     useCallback(() => {
       setName('');
@@ -54,12 +56,13 @@ export default function HomeScreen({ navigation }: any) {
     try {
       const cached = await AsyncStorage.getItem(`cached_tags_${activePhone}`);
       if (cached) {
-        const { most, recent } = JSON.parse(cached);
+        const { most, recent, all } = JSON.parse(cached);
         if (most) setMostUsedTags(most);
         if (recent) setRecentTags(recent);
+        if (all) setAllAvailableTags(all);
       }
     } catch (e) {
-      // Quiet fail for cache read
+      // Quiet fail
     }
   };
 
@@ -78,6 +81,7 @@ export default function HomeScreen({ navigation }: any) {
         const counts: Record<string, number> = {};
         const recents: string[] = [];
         const seenRecents = new Set<string>();
+        const allTagsSet = new Set<string>();
 
         for (const row of data) {
           if (!row.Tags) continue;
@@ -86,6 +90,7 @@ export default function HomeScreen({ navigation }: any) {
             .filter(Boolean);
 
           for (const tag of splitTags) {
+            allTagsSet.add(tag);
             counts[tag] = (counts[tag] || 0) + 1;
             if (!seenRecents.has(tag)) {
               seenRecents.add(tag);
@@ -98,19 +103,33 @@ export default function HomeScreen({ navigation }: any) {
           .sort((a, b) => counts[b] - counts[a])
           .slice(0, 8);
         const sortedRecents = recents.slice(0, 8);
+        const allList = Array.from(allTagsSet);
 
         setMostUsedTags(sortedMostUsed);
         setRecentTags(sortedRecents);
+        setAllAvailableTags(allList);
 
         AsyncStorage.setItem(
           `cached_tags_${activePhone}`,
-          JSON.stringify({ most: sortedMostUsed, recent: sortedRecents })
+          JSON.stringify({ most: sortedMostUsed, recent: sortedRecents, all: allList })
         );
       }
     } catch (err) {
-      // Quiet fail for suggestions
+      // Quiet fail
     }
   };
+
+  const tagSuggestions = useMemo(() => {
+    const query = tagInput.trim().toLowerCase();
+    if (!query) return [];
+
+    return allAvailableTags
+      .filter((tag) => {
+        const lower = tag.toLowerCase();
+        return lower.includes(query) && !tagsList.includes(tag);
+      })
+      .slice(0, 5);
+  }, [tagInput, allAvailableTags, tagsList]);
 
   const handlePickDeviceContact = async () => {
     try {
@@ -128,9 +147,7 @@ export default function HomeScreen({ navigation }: any) {
 
         if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
           const rawNumber = contact.phoneNumbers[0].number || '';
-          // Clean non-digits
           const digitsOnly = rawNumber.replace(/\D/g, '');
-          // Extract last 10 digits for Indian mobile numbers
           const clean10 = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
           setPhone(clean10);
         }
@@ -146,6 +163,14 @@ export default function HomeScreen({ navigation }: any) {
       setTagsList((prev) => [...prev, clean]);
     }
     setTagInput('');
+  };
+
+  const handleSelectSuggestion = (tag: string) => {
+    if (!tagsList.includes(tag)) {
+      setTagsList((prev) => [...prev, tag]);
+    }
+    setTagInput('');
+    Keyboard.dismiss();
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
@@ -171,26 +196,15 @@ export default function HomeScreen({ navigation }: any) {
     }
   };
 
-  // Scrolls so tags and quick tag suggestions are fully visible above keyboard
   const scrollToTagArea = () => {
     setTimeout(() => {
-      if (tagSectionRef.current && scrollViewRef.current) {
-        tagSectionRef.current.measureLayout(
-          scrollViewRef.current.getInnerViewNode
-            ? scrollViewRef.current.getInnerViewNode()
-            : (scrollViewRef.current as any),
-          (_left, top) => {
-            scrollViewRef.current?.scrollTo({ y: Math.max(0, top - 15), animated: true });
-          },
-          () => {
-            scrollViewRef.current?.scrollTo({ y: 150, animated: true });
-          }
-        );
-      }
-    }, 150);
+      scrollViewRef.current?.scrollTo({
+        y: Math.max(0, tagSectionY - 15),
+        animated: true,
+      });
+    }, 100);
   };
 
-  // Scrolls completely to bottom so all notes lines and container appear fully above keyboard
   const scrollToNotesArea = () => {
     setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true });
@@ -222,7 +236,6 @@ export default function HomeScreen({ navigation }: any) {
 
     setLoading(true);
     try {
-      // Check duplicate
       const { data: existing, error: checkError } = await supabase
         .from('Contacts_Table')
         .select('id')
@@ -300,6 +313,7 @@ export default function HomeScreen({ navigation }: any) {
           <TextInput
             style={styles.input}
             placeholder="e.g. Ramesh Kumar"
+            placeholderTextColor="#94A3B8"
             value={name}
             onChangeText={setName}
           />
@@ -308,6 +322,7 @@ export default function HomeScreen({ navigation }: any) {
           <TextInput
             style={styles.input}
             placeholder="10-digit number"
+            placeholderTextColor="#94A3B8"
             keyboardType="numeric"
             maxLength={10}
             value={phone}
@@ -315,9 +330,12 @@ export default function HomeScreen({ navigation }: any) {
           />
 
           {/* Tags & Suggestions Section */}
-          <View ref={tagSectionRef}>
+          <View
+            ref={tagSectionRef}
+            onLayout={(event) => setTagSectionY(event.nativeEvent.layout.y)}
+          >
             <View style={styles.tagsLabelRow}>
-              <Text style={styles.labelInRow}>Tags (comma-separated) *</Text>
+              <Text style={styles.labelInRow}>Tags (Press Space for new tag) *</Text>
               {(tagsList.length > 0 || tagInput.length > 0) && (
                 <TouchableOpacity
                   onPress={handleClearAllTags}
@@ -327,6 +345,7 @@ export default function HomeScreen({ navigation }: any) {
                 </TouchableOpacity>
               )}
             </View>
+
             <View style={styles.tagInputWrapper}>
               {tagsList.map((tag, idx) => (
                 <View key={idx} style={styles.selectedTagChip}>
@@ -346,11 +365,34 @@ export default function HomeScreen({ navigation }: any) {
                 value={tagInput}
                 onChangeText={handleTagInputChange}
                 onFocus={scrollToTagArea}
-                onSubmitEditing={() => handleAddTag(tagInput)}
-                blurOnSubmit={false}
+                onSubmitEditing={() => {
+                  handleAddTag(tagInput);
+                  Keyboard.dismiss();
+                }}
+                blurOnSubmit={true}
                 returnKeyType="done"
               />
             </View>
+
+            {/* Dropdown Suggestions List */}
+            {tagSuggestions.length > 0 && (
+              <View style={styles.suggestionsDropdown}>
+                {tagSuggestions.map((item, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={styles.suggestionRow}
+                    onPress={() => handleSelectSuggestion(item)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="pricetag-outline" size={15} color="#2563EB" />
+                    <Text style={styles.suggestionText} numberOfLines={1}>
+                      {item}
+                    </Text>
+                    <Text style={styles.suggestionTypeBadge}>Tag</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
 
             {(mostUsedTags.length > 0 || recentTags.length > 0) && (
               <View style={styles.suggestionsContainer}>
@@ -404,7 +446,7 @@ export default function HomeScreen({ navigation }: any) {
         </View>
       </ScrollView>
 
-      {/* Pinned Action Bar: Remains visible regardless of how many tags or lines are added */}
+      {/* Pinned Action Bar */}
       <View style={styles.bottomBar}>
         <TouchableOpacity
           style={styles.saveButton}
@@ -515,6 +557,39 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     paddingVertical: 4,
     paddingHorizontal: 6,
+  },
+  suggestionsDropdown: {
+    backgroundColor: '#FFFFFF',
+    marginTop: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F5F9',
+    gap: 8,
+  },
+  suggestionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1E293B',
+    fontWeight: '500',
+  },
+  suggestionTypeBadge: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    color: '#94A3B8',
+    fontWeight: '700',
   },
   notesInput: {
     borderWidth: 1,

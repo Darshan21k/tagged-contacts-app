@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
+  Keyboard,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
@@ -91,6 +92,9 @@ export default function ContactsScreen({ navigation, route }: any) {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [userPhone, setUserPhone] = useState('9999999999');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const searchInputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     AsyncStorage.getItem('user_phone').then((phone) => {
@@ -98,12 +102,12 @@ export default function ContactsScreen({ navigation, route }: any) {
     });
   }, []);
 
-  // Catches tag passed via route params and puts it into search bar
   useEffect(() => {
     if (route.params?.selectedTag !== undefined) {
       const chosenTag = route.params.selectedTag ? route.params.selectedTag.trim() : '';
       setSelectedTag(chosenTag || null);
       setSearchQuery(chosenTag);
+      setShowSuggestions(true);
       navigation.setParams({ selectedTag: undefined });
     }
   }, [route.params?.selectedTag, navigation]);
@@ -155,60 +159,140 @@ export default function ContactsScreen({ navigation, route }: any) {
     }, [userPhone, fetchPinnedTags, fetchContactsData])
   );
 
-  // Single unified filter logic
+  // Suggestions match against the current query or the active token
+  const suggestions = useMemo(() => {
+    const rawQuery = searchQuery.trim().toLowerCase();
+    if (!rawQuery || !showSuggestions) return [];
+
+    // Extract the active typing token (last word if user entered multiple)
+    const tokens = rawQuery.split(/[,\s]+/).filter(Boolean);
+    const activeToken = tokens[tokens.length - 1] || '';
+    if (!activeToken) return [];
+
+    const nameMatches = new Set<string>();
+    const tagMatches = new Set<string>();
+
+    for (const contact of allContacts) {
+      const name = (contact.Name || '').trim();
+      if (name && name.toLowerCase().includes(activeToken)) {
+        nameMatches.add(name);
+      }
+
+      if (contact.Tags) {
+        const splitTags = contact.Tags.split(',').map((t) => t.trim()).filter(Boolean);
+        for (const t of splitTags) {
+          if (t.toLowerCase().includes(activeToken)) {
+            tagMatches.add(t);
+          }
+        }
+      }
+    }
+
+    const tagResults = Array.from(tagMatches).slice(0, 5).map((text) => ({ text, type: 'tag' as const }));
+    const nameResults = Array.from(nameMatches).slice(0, 5).map((text) => ({ text, type: 'name' as const }));
+
+    return [...tagResults, ...nameResults];
+  }, [searchQuery, showSuggestions, allContacts]);
+
+  // Multi-token filter logic across Name, Phone, Tags, and OtherDetails
   const filteredContacts = useMemo(() => {
     let result = allContacts;
 
     if (selectedTag && selectedTag.trim()) {
       const tagLower = selectedTag.trim().toLowerCase();
       result = result.filter((c) => (c.Tags || '').toLowerCase().includes(tagLower));
-    } else if (searchQuery.trim()) {
-      const query = searchQuery.trim().toLowerCase();
+      return result;
+    }
+
+    const rawQuery = searchQuery.trim().toLowerCase();
+    if (rawQuery) {
+      const terms = rawQuery
+        .split(/[,\s]+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
+
       result = result.filter((c) => {
-        const nameMatch = (c.Name || '').toLowerCase().includes(query);
-        const phoneMatch = (c.Phonenumber || '').includes(query);
-        const tagsMatch = (c.Tags || '').toLowerCase().includes(query);
-        return nameMatch || phoneMatch || tagsMatch;
+        const contactName = (c.Name || '').toLowerCase();
+        const contactPhone = (c.Phonenumber || '');
+        const contactTags = (c.Tags || '').toLowerCase();
+        const contactDetails = (c.OtherDetails || '').toLowerCase();
+
+        return terms.every((term) => {
+          const nameMatch = contactName.includes(term);
+          const phoneMatch = contactPhone.includes(term);
+          const tagMatch = contactTags.includes(term);
+          const detailsMatch = contactDetails.includes(term);
+
+          return nameMatch || phoneMatch || tagMatch || detailsMatch;
+        });
       });
     }
 
     return result;
   }, [allContacts, selectedTag, searchQuery]);
 
-  // Pinned tag press: replaces search bar text with tag, or clears if toggled off
+  const handleSelectSuggestion = useCallback((text: string, type: 'name' | 'tag') => {
+    // If user has typed multi-words, replace only the last token with the selected suggestion
+    const words = searchQuery.trim().split(/[,\s]+/);
+    if (words.length > 1) {
+      words[words.length - 1] = text;
+      setSearchQuery(words.join(' '));
+    } else {
+      setSearchQuery(text);
+    }
+
+    if (type === 'tag') {
+      setSelectedTag(text);
+    } else {
+      setSelectedTag(null);
+    }
+    setShowSuggestions(false);
+  }, [searchQuery]);
+
   const handleTagPress = useCallback((tag: string | null) => {
     if (!tag) {
       setSelectedTag(null);
       setSearchQuery('');
+      setShowSuggestions(false);
       return;
     }
 
     setSelectedTag((prev) => {
       if (prev === tag) {
         setSearchQuery('');
+        setShowSuggestions(false);
         return null;
       } else {
         setSearchQuery(tag);
+        setShowSuggestions(true);
         return tag;
       }
     });
   }, []);
 
-  // Modal tag select: replaces search bar text with selected tag
   const openTagsModal = useCallback(() => {
+    Keyboard.dismiss();
     navigation.navigate('PopTags', {
       userPhone,
       onSelectTag: (tagResult: string) => {
         const chosenTag = tagResult ? tagResult.trim() : '';
         setSelectedTag(chosenTag || null);
         setSearchQuery(chosenTag);
+        setShowSuggestions(true);
       },
     });
+  }, [navigation, userPhone]);
+
+  const openManageTagsModal = useCallback(() => {
+    Keyboard.dismiss();
+    navigation.navigate('ManageTags', { userPhone });
   }, [navigation, userPhone]);
 
   const handleClearSearch = useCallback(() => {
     setSearchQuery('');
     setSelectedTag(null);
+    setShowSuggestions(false);
+    searchInputRef.current?.focus();
   }, []);
 
   const handleCall = useCallback((phoneNumber: string) => {
@@ -247,13 +331,15 @@ export default function ContactsScreen({ navigation, route }: any) {
         <View style={styles.searchSection}>
           <Ionicons name="search" size={20} color="#94A3B8" style={styles.searchIcon} />
           <TextInput
+            ref={searchInputRef}
             style={styles.searchInput}
             placeholder="Search Name, Phone, or Tag..."
             placeholderTextColor="#94A3B8"
             value={searchQuery}
+            onFocus={() => setShowSuggestions(true)}
             onChangeText={(text) => {
               setSearchQuery(text);
-              // If user changes text manually, clear the badge selection
+              setShowSuggestions(true);
               if (selectedTag && text !== selectedTag) {
                 setSelectedTag(null);
               }
@@ -271,6 +357,30 @@ export default function ContactsScreen({ navigation, route }: any) {
           </TouchableOpacity>
         </View>
 
+        {/* Auto Suggestion Dropdown */}
+        {suggestions.length > 0 && (
+          <View style={styles.suggestionsDropdown}>
+            {suggestions.map((item, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={styles.suggestionRow}
+                onPress={() => handleSelectSuggestion(item.text, item.type)}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={item.type === 'tag' ? 'pricetag-outline' : 'person-outline'}
+                  size={15}
+                  color={item.type === 'tag' ? '#2563EB' : '#64748B'}
+                />
+                <Text style={styles.suggestionText} numberOfLines={1}>
+                  {item.text}
+                </Text>
+                <Text style={styles.suggestionTypeBadge}>{item.type}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         <View style={styles.tagsWindowCard}>
           <View style={styles.tagsWindowHeader}>
             <View style={styles.tagsTitleRow}>
@@ -279,7 +389,7 @@ export default function ContactsScreen({ navigation, route }: any) {
             </View>
             <TouchableOpacity
               style={styles.settingsIconBtn}
-              onPress={() => navigation.navigate('ManageTags', { userPhone })}
+              onPress={openManageTagsModal}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="settings-outline" size={17} color="#64748B" />
@@ -319,14 +429,14 @@ export default function ContactsScreen({ navigation, route }: any) {
         </View>
       </View>
     );
-  }, [searchQuery, selectedTag, pinnedTags, userPhone, navigation, handleClearSearch, openTagsModal, handleTagPress]);
+  }, [searchQuery, selectedTag, pinnedTags, suggestions, handleClearSearch, openTagsModal, openManageTagsModal, handleTagPress, handleSelectSuggestion]);
 
   const renderStickySectionHeader = useCallback(() => {
     return (
       <View style={styles.stickyBar}>
         <Text style={styles.counterText}>
           Total Contacts: {filteredContacts.length}
-          {searchQuery ? ` (Tag: "${searchQuery}")` : ''}
+          {searchQuery ? ` (Filter: "${searchQuery}")` : ''}
         </Text>
       </View>
     );
@@ -385,6 +495,41 @@ const styles = StyleSheet.create({
   searchIcon: { marginRight: 8 },
   searchInput: { flex: 1, height: 46, fontSize: 15, color: '#0F172A' },
   tagFilterBtn: { padding: 6, marginLeft: 6 },
+  suggestionsDropdown: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginTop: -4,
+    marginBottom: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F5F9',
+    gap: 8,
+  },
+  suggestionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1E293B',
+    fontWeight: '500',
+  },
+  suggestionTypeBadge: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    color: '#94A3B8',
+    fontWeight: '700',
+  },
   tagsWindowCard: {
     backgroundColor: '#FFFFFF',
     marginHorizontal: 16,

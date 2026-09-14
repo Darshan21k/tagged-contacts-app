@@ -86,7 +86,7 @@ export default function AdminPage() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Admin Portal ({filtered.length} Users)</Text>
+      <Text style={styles.title}>Admin Control ({filtered.length} Users)</Text>
 
       {/* Search Bar with Clear Icon */}
       <View style={styles.searchSection}>

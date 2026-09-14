@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Platform, StyleSheet } from 'react-native';
+import { View, Text, Platform, StyleSheet, TouchableOpacity } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -107,6 +107,8 @@ function MainTabs() {
 }
 
 export default function AppNavigator() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Stack.Navigator initialRouteName="AuthLoading">
       <Stack.Screen name="AuthLoading" component={AuthLoadingScreen} options={{ headerShown: false }} />
@@ -133,7 +135,27 @@ export default function AppNavigator() {
           animation: 'fade',
         }}
       />
-      <Stack.Screen name="Admin" component={AdminPage} options={{ title: 'Admin' }} />
+      <Stack.Screen 
+        name="Admin" 
+        component={AdminPage} 
+        options={({ navigation }) => ({
+          header: () => (
+            <View style={[styles.compactHeaderContainer, { paddingTop: insets.top + 6 }]}>
+              <View style={styles.compactHeaderRow}>
+                <TouchableOpacity
+                  onPress={() => navigation.goBack()}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={{ marginRight: 6 }}
+                >
+                  <Ionicons name="chevron-back" size={24} color="#0F172A" />
+                </TouchableOpacity>
+                <Text style={styles.compactHeaderTitle}>Admin</Text>
+                <View style={styles.badgeIndicator} />
+              </View>
+            </View>
+          ),
+        })} 
+      />
     </Stack.Navigator>
   );
 }
@@ -163,5 +185,4 @@ const styles = StyleSheet.create({
     backgroundColor: '#2563EB',
     marginTop: 4,
   },
-});     
-
+});

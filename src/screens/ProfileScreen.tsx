@@ -143,7 +143,7 @@ export default function ProfileScreen({ navigation }: any) {
           activeOpacity={0.8}
         >
           <Ionicons name="shield-checkmark-outline" size={20} color="#2563EB" />
-          <Text style={styles.adminText}>Admin User Portal</Text>
+          <Text style={styles.adminText}>Admin User Control</Text>
         </TouchableOpacity>
       )}
 
