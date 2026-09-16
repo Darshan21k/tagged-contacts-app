@@ -2,7 +2,7 @@
   "expo": {
     "name": "ContactNow",
     "slug": "tagged-contacts-app",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -21,7 +21,12 @@
         "foregroundImage": "./assets/icon.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.darshank21.taggedcontactsapp"
+      "package": "com.darshank21.taggedcontactsapp",
+      "splashScreen": {
+        "backgroundColor": "#FFFFFF",
+        "image": "./assets/icon.png",
+        "resizeMode": "contain"
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -30,6 +35,10 @@
       "eas": {
         "projectId": "813d9b4f-37a5-480e-8dd1-40034257a8f8"
       }
-    }
+    },
+    "plugins": [
+      "expo-splash-screen",
+      "expo-status-bar"
+    ]
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Keyboard,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,9 +30,12 @@ export default function EditContactPage({ route, navigation }: any) {
   const [mostUsedTags, setMostUsedTags] = useState<string[]>([]);
   const [recentTags, setRecentTags] = useState<string[]>([]);
   const [tagTab, setTagTab] = useState<'most' | 'recent'>('most');
+  const [allAvailableTags, setAllAvailableTags] = useState<string[]>([]);
+  const [tagSectionY, setTagSectionY] = useState(0);
 
   const scrollViewRef = useRef<ScrollView>(null);
   const tagSectionRef = useRef<View>(null);
+  const tagInputRef = useRef<TextInput>(null);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -73,12 +77,13 @@ export default function EditContactPage({ route, navigation }: any) {
     try {
       const cached = await AsyncStorage.getItem(`cached_tags_${activePhone}`);
       if (cached) {
-        const { most, recent } = JSON.parse(cached);
+        const { most, recent, all } = JSON.parse(cached);
         if (most) setMostUsedTags(most);
         if (recent) setRecentTags(recent);
+        if (all) setAllAvailableTags(all);
       }
-    } catch (e) {
-      // Quiet fail for cache read
+    } catch {
+      // Quiet fail
     }
   };
 
@@ -97,6 +102,7 @@ export default function EditContactPage({ route, navigation }: any) {
         const counts: Record<string, number> = {};
         const recents: string[] = [];
         const seenRecents = new Set<string>();
+        const allTagsSet = new Set<string>();
 
         for (const row of data) {
           if (!row.Tags) continue;
@@ -105,6 +111,7 @@ export default function EditContactPage({ route, navigation }: any) {
             .filter(Boolean);
 
           for (const tag of splitTags) {
+            allTagsSet.add(tag);
             counts[tag] = (counts[tag] || 0) + 1;
             if (!seenRecents.has(tag)) {
               seenRecents.add(tag);
@@ -117,17 +124,19 @@ export default function EditContactPage({ route, navigation }: any) {
           .sort((a, b) => counts[b] - counts[a])
           .slice(0, 8);
         const sortedRecents = recents.slice(0, 8);
+        const allList = Array.from(allTagsSet);
 
         setMostUsedTags(sortedMostUsed);
         setRecentTags(sortedRecents);
+        setAllAvailableTags(allList);
 
         AsyncStorage.setItem(
           `cached_tags_${activePhone}`,
-          JSON.stringify({ most: sortedMostUsed, recent: sortedRecents })
+          JSON.stringify({ most: sortedMostUsed, recent: sortedRecents, all: allList })
         );
       }
-    } catch (err) {
-      // Quiet fail for suggestions
+    } catch {
+      // Quiet fail
     }
   };
 
@@ -160,12 +169,34 @@ export default function EditContactPage({ route, navigation }: any) {
     }
   };
 
+  // Real-time tag input auto-suggestions matching user typing
+  const tagSuggestions = useMemo(() => {
+    const query = tagInput.trim().toLowerCase();
+    if (!query) return [];
+
+    return allAvailableTags
+      .filter((tag) => {
+        const lower = tag.toLowerCase();
+        return lower.includes(query) && !tagsList.includes(tag);
+      })
+      .slice(0, 5);
+  }, [tagInput, allAvailableTags, tagsList]);
+
   const handleAddTag = (text: string) => {
     const clean = text.replace(/,/g, '').trim();
     if (clean && !tagsList.includes(clean)) {
       setTagsList((prev) => [...prev, clean]);
     }
     setTagInput('');
+  };
+
+  // Keeps keyboard open and refocuses input immediately
+  const handleSelectSuggestion = (tag: string) => {
+    if (!tagsList.includes(tag)) {
+      setTagsList((prev) => [...prev, tag]);
+    }
+    setTagInput('');
+    tagInputRef.current?.focus();
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
@@ -189,24 +220,23 @@ export default function EditContactPage({ route, navigation }: any) {
     if (!tagsList.includes(tagToAdd)) {
       setTagsList((prev) => [...prev, tagToAdd]);
     }
+    tagInputRef.current?.focus();
+  };
+
+  // Gmail-style backspace delete when input text is empty
+  const handleKeyPress = ({ nativeEvent }: any) => {
+    if (nativeEvent.key === 'Backspace' && tagInput === '' && tagsList.length > 0) {
+      setTagsList((prev) => prev.slice(0, -1));
+    }
   };
 
   const scrollToTagArea = () => {
     setTimeout(() => {
-      if (tagSectionRef.current && scrollViewRef.current) {
-        tagSectionRef.current.measureLayout(
-          scrollViewRef.current.getInnerViewNode
-            ? scrollViewRef.current.getInnerViewNode()
-            : (scrollViewRef.current as any),
-          (_left, top) => {
-            scrollViewRef.current?.scrollTo({ y: Math.max(0, top - 15), animated: true });
-          },
-          () => {
-            scrollViewRef.current?.scrollTo({ y: 150, animated: true });
-          }
-        );
-      }
-    }, 150);
+      scrollViewRef.current?.scrollTo({
+        y: Math.max(0, tagSectionY - 15),
+        animated: true,
+      });
+    }, 100);
   };
 
   const scrollToNotesArea = () => {
@@ -297,7 +327,7 @@ export default function EditContactPage({ route, navigation }: any) {
       <ScrollView
         ref={scrollViewRef}
         contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.card}>
@@ -322,9 +352,12 @@ export default function EditContactPage({ route, navigation }: any) {
           />
 
           {/* Tags & Suggestions Section */}
-          <View ref={tagSectionRef}>
+          <View
+            ref={tagSectionRef}
+            onLayout={(event) => setTagSectionY(event.nativeEvent.layout.y)}
+          >
             <View style={styles.tagsLabelRow}>
-              <Text style={styles.labelInRow}>Tags (comma-separated) *</Text>
+              <Text style={styles.labelInRow}>Tags (use comma to add) *</Text>
               {(tagsList.length > 0 || tagInput.length > 0) && (
                 <TouchableOpacity
                   onPress={handleClearAllTags}
@@ -334,7 +367,12 @@ export default function EditContactPage({ route, navigation }: any) {
                 </TouchableOpacity>
               )}
             </View>
-            <View style={styles.tagInputWrapper}>
+
+            <TouchableOpacity
+              activeOpacity={1}
+              style={styles.tagInputWrapper}
+              onPress={() => tagInputRef.current?.focus()}
+            >
               {tagsList.map((tag, idx) => (
                 <View key={idx} style={styles.selectedTagChip}>
                   <Text style={styles.selectedTagText}>{tag}</Text>
@@ -347,17 +385,42 @@ export default function EditContactPage({ route, navigation }: any) {
                 </View>
               ))}
               <TextInput
+                ref={tagInputRef}
                 style={styles.chipTextInput}
                 placeholder={tagsList.length === 0 ? 'Work, Client, Vendor' : 'Add more...'}
                 placeholderTextColor="#94A3B8"
                 value={tagInput}
                 onChangeText={handleTagInputChange}
+                onKeyPress={handleKeyPress}
                 onFocus={scrollToTagArea}
-                onSubmitEditing={() => handleAddTag(tagInput)}
-                blurOnSubmit={false}
+                onSubmitEditing={() => {
+                  handleAddTag(tagInput);
+                  Keyboard.dismiss();
+                }}
+                blurOnSubmit={true}
                 returnKeyType="done"
               />
-            </View>
+            </TouchableOpacity>
+
+            {/* Dropdown Suggestions List */}
+            {tagSuggestions.length > 0 && (
+              <View style={styles.suggestionsDropdown}>
+                {tagSuggestions.map((item, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={styles.suggestionRow}
+                    onPress={() => handleSelectSuggestion(item)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="pricetag-outline" size={15} color="#2563EB" />
+                    <Text style={styles.suggestionText} numberOfLines={1}>
+                      {item}
+                    </Text>
+                    <Text style={styles.suggestionTypeBadge}>Tag</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
 
             {(mostUsedTags.length > 0 || recentTags.length > 0) && (
               <View style={styles.suggestionsContainer}>
@@ -513,10 +576,10 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 10,
-    height: 46,
-    paddingHorizontal: 14,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    minHeight: 46,
+    paddingHorizontal: 12,
     fontSize: 15,
     color: '#0F172A',
     backgroundColor: '#F8FAFC',
@@ -556,6 +619,39 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     paddingVertical: 4,
     paddingHorizontal: 6,
+  },
+  suggestionsDropdown: {
+    backgroundColor: '#FFFFFF',
+    marginTop: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F5F9',
+    gap: 8,
+  },
+  suggestionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1E293B',
+    fontWeight: '500',
+  },
+  suggestionTypeBadge: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    color: '#94A3B8',
+    fontWeight: '700',
   },
   suggestionsContainer: { marginTop: 10 },
   tagTabsRow: {

@@ -107,7 +107,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       const chosenTag = route.params.selectedTag ? route.params.selectedTag.trim() : '';
       setSelectedTag(chosenTag || null);
       setSearchQuery(chosenTag);
-      setShowSuggestions(true);
+      setShowSuggestions(false);
       navigation.setParams({ selectedTag: undefined });
     }
   }, [route.params?.selectedTag, navigation]);
@@ -159,29 +159,24 @@ export default function ContactsScreen({ navigation, route }: any) {
     }, [userPhone, fetchPinnedTags, fetchContactsData])
   );
 
-  // Suggestions match against the current query or the active token
+  // Suggestions match against the typed query
   const suggestions = useMemo(() => {
     const rawQuery = searchQuery.trim().toLowerCase();
     if (!rawQuery || !showSuggestions) return [];
-
-    // Extract the active typing token (last word if user entered multiple)
-    const tokens = rawQuery.split(/[,\s]+/).filter(Boolean);
-    const activeToken = tokens[tokens.length - 1] || '';
-    if (!activeToken) return [];
 
     const nameMatches = new Set<string>();
     const tagMatches = new Set<string>();
 
     for (const contact of allContacts) {
       const name = (contact.Name || '').trim();
-      if (name && name.toLowerCase().includes(activeToken)) {
+      if (name && name.toLowerCase().includes(rawQuery)) {
         nameMatches.add(name);
       }
 
       if (contact.Tags) {
         const splitTags = contact.Tags.split(',').map((t) => t.trim()).filter(Boolean);
         for (const t of splitTags) {
-          if (t.toLowerCase().includes(activeToken)) {
+          if (t.toLowerCase().includes(rawQuery)) {
             tagMatches.add(t);
           }
         }
@@ -231,23 +226,17 @@ export default function ContactsScreen({ navigation, route }: any) {
     return result;
   }, [allContacts, selectedTag, searchQuery]);
 
+  // Sets the selected suggestion directly without appending or duplicating previous text
   const handleSelectSuggestion = useCallback((text: string, type: 'name' | 'tag') => {
-    // If user has typed multi-words, replace only the last token with the selected suggestion
-    const words = searchQuery.trim().split(/[,\s]+/);
-    if (words.length > 1) {
-      words[words.length - 1] = text;
-      setSearchQuery(words.join(' '));
-    } else {
-      setSearchQuery(text);
-    }
-
+    setSearchQuery(text);
     if (type === 'tag') {
       setSelectedTag(text);
     } else {
       setSelectedTag(null);
     }
     setShowSuggestions(false);
-  }, [searchQuery]);
+    Keyboard.dismiss();
+  }, []);
 
   const handleTagPress = useCallback((tag: string | null) => {
     if (!tag) {
@@ -264,7 +253,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         return null;
       } else {
         setSearchQuery(tag);
-        setShowSuggestions(true);
+        setShowSuggestions(false);
         return tag;
       }
     });
@@ -278,7 +267,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         const chosenTag = tagResult ? tagResult.trim() : '';
         setSelectedTag(chosenTag || null);
         setSearchQuery(chosenTag);
-        setShowSuggestions(true);
+        setShowSuggestions(false);
       },
     });
   }, [navigation, userPhone]);

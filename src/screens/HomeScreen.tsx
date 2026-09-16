@@ -34,6 +34,7 @@ export default function HomeScreen({ navigation }: any) {
 
   const scrollViewRef = useRef<ScrollView>(null);
   const tagSectionRef = useRef<View>(null);
+  const tagInputRef = useRef<TextInput>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -165,12 +166,13 @@ export default function HomeScreen({ navigation }: any) {
     setTagInput('');
   };
 
+  // Keep keyboard open and re-focus input immediately upon picking a suggestion
   const handleSelectSuggestion = (tag: string) => {
     if (!tagsList.includes(tag)) {
       setTagsList((prev) => [...prev, tag]);
     }
     setTagInput('');
-    Keyboard.dismiss();
+    tagInputRef.current?.focus();
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
@@ -193,6 +195,14 @@ export default function HomeScreen({ navigation }: any) {
   const handleAddTagSuggestion = (tagToAdd: string) => {
     if (!tagsList.includes(tagToAdd)) {
       setTagsList((prev) => [...prev, tagToAdd]);
+    }
+    tagInputRef.current?.focus();
+  };
+
+  // Gmail-style backspace delete when input text is empty
+  const handleKeyPress = ({ nativeEvent }: any) => {
+    if (nativeEvent.key === 'Backspace' && tagInput === '' && tagsList.length > 0) {
+      setTagsList((prev) => prev.slice(0, -1));
     }
   };
 
@@ -293,7 +303,7 @@ export default function HomeScreen({ navigation }: any) {
       <ScrollView
         ref={scrollViewRef}
         contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.card}>
@@ -335,7 +345,7 @@ export default function HomeScreen({ navigation }: any) {
             onLayout={(event) => setTagSectionY(event.nativeEvent.layout.y)}
           >
             <View style={styles.tagsLabelRow}>
-              <Text style={styles.labelInRow}>Tags (Press Space for new tag) *</Text>
+              <Text style={styles.labelInRow}>Tags (use comma to add) *</Text>
               {(tagsList.length > 0 || tagInput.length > 0) && (
                 <TouchableOpacity
                   onPress={handleClearAllTags}
@@ -346,7 +356,11 @@ export default function HomeScreen({ navigation }: any) {
               )}
             </View>
 
-            <View style={styles.tagInputWrapper}>
+            <TouchableOpacity
+              activeOpacity={1}
+              style={styles.tagInputWrapper}
+              onPress={() => tagInputRef.current?.focus()}
+            >
               {tagsList.map((tag, idx) => (
                 <View key={idx} style={styles.selectedTagChip}>
                   <Text style={styles.selectedTagText}>{tag}</Text>
@@ -359,11 +373,13 @@ export default function HomeScreen({ navigation }: any) {
                 </View>
               ))}
               <TextInput
+                ref={tagInputRef}
                 style={styles.chipTextInput}
                 placeholder={tagsList.length === 0 ? 'e.g. Client, Bangalore, RealEstate' : 'Add more...'}
                 placeholderTextColor="#94A3B8"
                 value={tagInput}
                 onChangeText={handleTagInputChange}
+                onKeyPress={handleKeyPress}
                 onFocus={scrollToTagArea}
                 onSubmitEditing={() => {
                   handleAddTag(tagInput);
@@ -372,7 +388,7 @@ export default function HomeScreen({ navigation }: any) {
                 blurOnSubmit={true}
                 returnKeyType="done"
               />
-            </View>
+            </TouchableOpacity>
 
             {/* Dropdown Suggestions List */}
             {tagSuggestions.length > 0 && (
