@@ -169,7 +169,6 @@ export default function EditContactPage({ route, navigation }: any) {
     }
   };
 
-  // Real-time tag input auto-suggestions matching user typing
   const tagSuggestions = useMemo(() => {
     const query = tagInput.trim().toLowerCase();
     if (!query) return [];
@@ -190,7 +189,6 @@ export default function EditContactPage({ route, navigation }: any) {
     setTagInput('');
   };
 
-  // Keeps keyboard open and refocuses input immediately
   const handleSelectSuggestion = (tag: string) => {
     if (!tagsList.includes(tag)) {
       setTagsList((prev) => [...prev, tag]);
@@ -223,7 +221,6 @@ export default function EditContactPage({ route, navigation }: any) {
     tagInputRef.current?.focus();
   };
 
-  // Gmail-style backspace delete when input text is empty
   const handleKeyPress = ({ nativeEvent }: any) => {
     if (nativeEvent.key === 'Backspace' && tagInput === '' && tagsList.length > 0) {
       setTagsList((prev) => prev.slice(0, -1));
@@ -322,7 +319,7 @@ export default function EditContactPage({ route, navigation }: any) {
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       <ScrollView
         ref={scrollViewRef}
@@ -474,7 +471,7 @@ export default function EditContactPage({ route, navigation }: any) {
         </View>
       </ScrollView>
 
-      {/* Pinned Action Bar */}
+      {/* Pinned Action Bar - Moves up automatically with the keyboard */}
       <View style={styles.bottomBar}>
         <TouchableOpacity
           style={styles.saveBtn}
@@ -539,7 +536,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 24,
+    paddingBottom: 40,
   },
   card: {
     backgroundColor: '#FFFFFF',
