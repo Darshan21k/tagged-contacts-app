@@ -1,10 +1,11 @@
 export interface Contact {
-  id?: number;
+  id: number;
   Name: string;
   Phonenumber: string;
   Tags: string;
   OtherDetails?: string;
   Userphonenumber: string;
+  is_starred?: boolean;
 }
 
 export interface UserProfile {
