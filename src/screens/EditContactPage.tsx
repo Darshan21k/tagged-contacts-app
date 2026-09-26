@@ -14,10 +14,12 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
 
 export default function EditContactPage({ route, navigation }: any) {
   const { id } = route.params;
+  const insets = useSafeAreaInsets();
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -32,6 +34,7 @@ export default function EditContactPage({ route, navigation }: any) {
   const [tagTab, setTagTab] = useState<'most' | 'recent'>('most');
   const [allAvailableTags, setAllAvailableTags] = useState<string[]>([]);
   const [tagSectionY, setTagSectionY] = useState(0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
   const tagSectionRef = useRef<View>(null);
@@ -62,6 +65,16 @@ export default function EditContactPage({ route, navigation }: any) {
       ),
     });
   }, [navigation]);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem('user_phone').then((storedPhone) => {
@@ -315,6 +328,9 @@ export default function EditContactPage({ route, navigation }: any) {
     );
   }
 
+  // When keyboard is visible, bottom padding stays compact; when hidden, it expands to avoid hardware nav buttons
+  const dynamicBottomPadding = keyboardVisible ? 12 : Math.max(insets.bottom, 12) + 6;
+
   return (
     <KeyboardAvoidingView
       style={styles.screen}
@@ -323,7 +339,7 @@ export default function EditContactPage({ route, navigation }: any) {
     >
       <ScrollView
         ref={scrollViewRef}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 32 }]}
         keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
@@ -471,8 +487,8 @@ export default function EditContactPage({ route, navigation }: any) {
         </View>
       </ScrollView>
 
-      {/* Pinned Action Bar - Moves up automatically with the keyboard */}
-      <View style={styles.bottomBar}>
+      {/* Pinned Action Bar with hardware navigation-safe bottom padding */}
+      <View style={[styles.bottomBar, { paddingBottom: dynamicBottomPadding }]}>
         <TouchableOpacity
           style={styles.saveBtn}
           onPress={handleUpdate}
@@ -536,7 +552,6 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 40,
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -695,7 +710,7 @@ const styles = StyleSheet.create({
   bottomBar: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
     elevation: 8,

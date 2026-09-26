@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,11 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Switch,
+  Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { UserProfile } from '../types';
@@ -20,6 +23,12 @@ import { UserProfile } from '../types';
 export default function ProfileScreen({ navigation }: any) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // App Lock Toggle State
+  const [isLockEnabled, setIsLockEnabled] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Edit Modal State
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -29,7 +38,83 @@ export default function ProfileScreen({ navigation }: any) {
 
   useEffect(() => {
     fetchUserProfile();
+    loadLockPreference();
+    return () => {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    };
   }, []);
+
+  const loadLockPreference = async () => {
+    try {
+      const storedVal = await AsyncStorage.getItem('app_lock_enabled');
+      setIsLockEnabled(storedVal === 'true');
+    } catch {
+      // Quiet fail
+    }
+  };
+
+  const showToast = (message: string) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastMessage(message);
+    Animated.timing(toastOpacity, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+
+    toastTimeoutRef.current = setTimeout(() => {
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start(() => setToastMessage(null));
+    }, 2000);
+  };
+
+  const handleToggleLock = async (value: boolean) => {
+    try {
+      if (value) {
+        const hasHardware = await LocalAuthentication.hasHardwareAsync();
+        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+
+        if (!hasHardware || !isEnrolled) {
+          Alert.alert(
+            'Security Unavailable',
+            'Please set up a screen lock (PIN, Pattern, Fingerprint, or Face) in your phone settings first.'
+          );
+          return;
+        }
+
+        const auth = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Verify your identity to enable App Lock',
+          fallbackLabel: 'Use Device PIN',
+          cancelLabel: 'Cancel',
+          disableDeviceFallback: false,
+        });
+
+        if (auth.success) {
+          await AsyncStorage.setItem('app_lock_enabled', 'true');
+          setIsLockEnabled(true);
+          showToast('App lock enabled successfully');
+        }
+      } else {
+        const auth = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Verify identity to turn off App Lock',
+          fallbackLabel: 'Use Device PIN',
+          cancelLabel: 'Cancel',
+          disableDeviceFallback: false,
+        });
+
+        if (auth.success) {
+          await AsyncStorage.setItem('app_lock_enabled', 'false');
+          setIsLockEnabled(false);
+          showToast('App lock disabled');
+        }
+      }
+    } catch (err: any) {
+      Alert.alert('Authentication Error', err.message || 'Unable to authenticate device.');
+    }
+  };
 
   const fetchUserProfile = async () => {
     setLoading(true);
@@ -151,101 +236,138 @@ export default function ProfileScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.headerCard}>
-        <View style={styles.avatarCircle}>
-          <Ionicons name="person" size={44} color="#2563EB" />
-        </View>
-        <Text style={styles.profileName}>{profile?.Name || 'User'}</Text>
-        <Text style={styles.profileSubtitle}>+91 {profile?.Phonenumber}</Text>
-
-        <View style={styles.badgeRow}>
-          <View style={styles.badgeContainer}>
-            <Ionicons
-              name={profile?.Login_Access === 'yes' ? 'checkmark-circle' : 'alert-circle'}
-              size={16}
-              color={profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626'}
-            />
-            <Text
-              style={[
-                styles.badgeText,
-                { color: profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626' },
-              ]}
-            >
-              {profile?.Login_Access === 'yes' ? 'Access Active' : 'Access Restricted'}
-            </Text>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContainer}>
+        {/* Profile Card */}
+        <View style={styles.headerCard}>
+          <View style={styles.avatarCircle}>
+            <Ionicons name="person" size={44} color="#2563EB" />
           </View>
+          <Text style={styles.profileName}>{profile?.Name || 'User'}</Text>
+          <Text style={styles.profileSubtitle}>+91 {profile?.Phonenumber}</Text>
 
-          {isAdmin && (
-            <View style={styles.adminRoleBadge}>
-              <Text style={styles.adminRoleBadgeText}>ADMIN</Text>
+          <View style={styles.badgeRow}>
+            <View style={styles.badgeContainer}>
+              <Ionicons
+                name={profile?.Login_Access === 'yes' ? 'checkmark-circle' : 'alert-circle'}
+                size={16}
+                color={profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626'}
+              />
+              <Text
+                style={[
+                  styles.badgeText,
+                  { color: profile?.Login_Access === 'yes' ? '#16A34A' : '#DC2626' },
+                ]}
+              >
+                {profile?.Login_Access === 'yes' ? 'Access Active' : 'Access Restricted'}
+              </Text>
             </View>
-          )}
-        </View>
-      </View>
 
-      <View style={styles.detailsCard}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionHeader}>Account Information</Text>
+            {isAdmin && (
+              <View style={styles.adminRoleBadge}>
+                <Text style={styles.adminRoleBadgeText}>ADMIN</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Account Details Card */}
+        <View style={styles.detailsCard}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionHeader}>Account Information</Text>
+            <TouchableOpacity
+              style={styles.editIconBtn}
+              onPress={openEditModal}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="create-outline" size={18} color="#2563EB" />
+              <Text style={styles.editText}>Edit</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.infoRow}>
+            <View style={styles.iconBox}>
+              <Ionicons name="person-outline" size={18} color="#64748B" />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <Text style={styles.infoLabel}>Full Name</Text>
+              <Text style={styles.infoValue}>{profile?.Name || 'Not provided'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.infoRow}>
+            <View style={styles.iconBox}>
+              <Ionicons name="call-outline" size={18} color="#64748B" />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <Text style={styles.infoLabel}>Phone Number (Locked)</Text>
+              <Text style={styles.infoValue}>+91 {profile?.Phonenumber}</Text>
+            </View>
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.infoRow}>
+            <View style={styles.iconBox}>
+              <Ionicons name="mail-outline" size={18} color="#64748B" />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <Text style={styles.infoLabel}>Email (Used for Login OTP)</Text>
+              <Text style={styles.infoValue}>{profile?.Mail_id || 'Not provided'}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Security / App Lock Card */}
+        <View style={styles.detailsCard}>
+          <Text style={styles.sectionHeader}>Security</Text>
+
+          <View style={[styles.infoRow, { justifyContent: 'space-between' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 }}>
+              <View style={styles.iconBox}>
+                <Ionicons name="shield-checkmark-outline" size={18} color="#2563EB" />
+              </View>
+              <View style={styles.infoTextContainer}>
+                <Text style={styles.securityTitle}>Require Screen Lock</Text>
+                <Text style={styles.securitySubtitle}>
+                  Biometric or PIN unlock when opening ContactNow
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={isLockEnabled}
+              onValueChange={handleToggleLock}
+              trackColor={{ false: '#CBD5E1', true: '#BFDBFE' }}
+              thumbColor={isLockEnabled ? '#2563EB' : '#FFFFFF'}
+            />
+          </View>
+        </View>
+
+        {isAdmin && (
           <TouchableOpacity
-            style={styles.editIconBtn}
-            onPress={openEditModal}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={styles.adminButton}
+            onPress={() => navigation.navigate('Admin')}
+            activeOpacity={0.8}
           >
-            <Ionicons name="create-outline" size={18} color="#2563EB" />
-            <Text style={styles.editText}>Edit</Text>
+            <Ionicons name="shield-checkmark-outline" size={20} color="#2563EB" />
+            <Text style={styles.adminText}>Admin User Control</Text>
           </TouchableOpacity>
-        </View>
+        )}
 
-        <View style={styles.infoRow}>
-          <View style={styles.iconBox}>
-            <Ionicons name="person-outline" size={18} color="#64748B" />
-          </View>
-          <View style={styles.infoTextContainer}>
-            <Text style={styles.infoLabel}>Full Name</Text>
-            <Text style={styles.infoValue}>{profile?.Name || 'Not provided'}</Text>
-          </View>
-        </View>
-
-        <View style={styles.divider} />
-
-        <View style={styles.infoRow}>
-          <View style={styles.iconBox}>
-            <Ionicons name="call-outline" size={18} color="#64748B" />
-          </View>
-          <View style={styles.infoTextContainer}>
-            <Text style={styles.infoLabel}>Phone Number (Locked)</Text>
-            <Text style={styles.infoValue}>+91 {profile?.Phonenumber}</Text>
-          </View>
-        </View>
-
-        <View style={styles.divider} />
-
-        <View style={styles.infoRow}>
-          <View style={styles.iconBox}>
-            <Ionicons name="mail-outline" size={18} color="#64748B" />
-          </View>
-          <View style={styles.infoTextContainer}>
-            <Text style={styles.infoLabel}>Email (Used for Login OTP)</Text>
-            <Text style={styles.infoValue}>{profile?.Mail_id || 'Not provided'}</Text>
-          </View>
-        </View>
-      </View>
-
-      {isAdmin && (
-        <TouchableOpacity
-          style={styles.adminButton}
-          onPress={() => navigation.navigate('Admin')}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="shield-checkmark-outline" size={20} color="#2563EB" />
-          <Text style={styles.adminText}>Admin User Control</Text>
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
+          <Ionicons name="log-out-outline" size={20} color="#DC2626" />
+          <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
-      )}
+      </ScrollView>
 
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
-        <Ionicons name="log-out-outline" size={20} color="#DC2626" />
-        <Text style={styles.logoutText}>Log Out</Text>
-      </TouchableOpacity>
+      {/* Toast Notification */}
+      {toastMessage && (
+        <Animated.View style={[styles.toastContainer, { opacity: toastOpacity }]}>
+          <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </Animated.View>
+      )}
 
       {/* Edit Profile Modal */}
       <Modal
@@ -332,7 +454,8 @@ export default function ProfileScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F1F5F9', padding: 16 },
+  container: { flex: 1, backgroundColor: '#F1F5F9' },
+  scrollContainer: { padding: 16, paddingBottom: 32 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   headerCard: {
     backgroundColor: '#FFFFFF',
@@ -392,7 +515,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 12,
   },
-  sectionHeader: { fontSize: 14, fontWeight: '700', color: '#475569' },
+  sectionHeader: { fontSize: 14, fontWeight: '700', color: '#475569', marginBottom: 8 },
   editIconBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -416,6 +539,8 @@ const styles = StyleSheet.create({
   infoTextContainer: { flex: 1 },
   infoLabel: { fontSize: 12, color: '#94A3B8' },
   infoValue: { fontSize: 14, fontWeight: '600', color: '#1E293B', marginTop: 2 },
+  securityTitle: { fontSize: 14, fontWeight: '600', color: '#0F172A' },
+  securitySubtitle: { fontSize: 12, color: '#64748B', marginTop: 2 },
   divider: { height: 1, backgroundColor: '#F1F5F9', marginVertical: 6 },
   adminButton: {
     flexDirection: 'row',
@@ -438,6 +563,29 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   logoutText: { color: '#DC2626', fontSize: 15, fontWeight: '600' },
+
+  toastContainer: {
+    position: 'absolute',
+    bottom: 24,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
+    gap: 8,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  toastText: {
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 
   /* Modal Styles */
   modalOverlay: {
