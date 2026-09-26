@@ -25,6 +25,13 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { supabase } from '../services/supabase';
 import { Contact } from '../types';
 
+interface ResolvedLinkBadge {
+  name: string;
+  phone: string;
+  matchedTag?: string;
+  matchedName?: boolean;
+}
+
 interface ContactCardProps {
   item: Contact;
   isSelectionMode: boolean;
@@ -39,6 +46,8 @@ interface ContactCardProps {
   onToggleStar: (contact: Contact) => void;
   searchQuery: string;
   onSwipeOpen: (ref: Swipeable) => void;
+  contactsMap: Map<string, Contact>;
+  onLinkedBadgePress: (targetContact: Contact) => void;
 }
 
 const ContactCard = React.memo(
@@ -56,32 +65,95 @@ const ContactCard = React.memo(
     onToggleStar,
     searchQuery,
     onSwipeOpen,
+    contactsMap,
+    onLinkedBadgePress,
   }: ContactCardProps) => {
     const isStarred = Boolean(item.is_starred);
     const swipeableRef = useRef<Swipeable>(null);
 
+    const activeTerms = useMemo(() => {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) return [];
+      return q.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+    }, [searchQuery]);
+
     const tagList = useMemo(() => {
-      return item.Tags
-        ? item.Tags.split(',')
-            .map((t) => t.trim())
-            .filter(Boolean)
-            .sort((a, b) => a.length - b.length || a.localeCompare(b))
-        : [];
-    }, [item.Tags]);
+      if (!item.Tags) return [];
+      const raw = item.Tags.split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      if (activeTerms.length === 0) {
+        return raw.sort((a, b) => a.length - b.length || a.localeCompare(b));
+      }
+
+      const matched: string[] = [];
+      const unmatched: string[] = [];
+
+      raw.forEach((t) => {
+        const lower = t.toLowerCase();
+        if (activeTerms.some((term) => lower.includes(term))) {
+          matched.push(t);
+        } else {
+          unmatched.push(t);
+        }
+      });
+
+      return [...matched, ...unmatched];
+    }, [item.Tags, activeTerms]);
+
+    const resolvedLinks = useMemo<ResolvedLinkBadge[]>(() => {
+      const linkedPhoneField = (item as any).LinkedContactPhone;
+      if (!linkedPhoneField) return [];
+
+      const phoneList = linkedPhoneField
+        .split(',')
+        .map((p: string) => p.trim().slice(-10))
+        .filter(Boolean);
+
+      return phoneList
+        .map((lPhone: string) => {
+          const linkedContact = contactsMap.get(lPhone);
+          if (!linkedContact) return null;
+
+          const linkedName = linkedContact.Name || 'Contact';
+          const linkedTags = linkedContact.Tags
+            ? linkedContact.Tags.split(',').map((t) => t.trim()).filter(Boolean)
+            : [];
+
+          let matchedTag: string | undefined = undefined;
+          let matchedName = false;
+
+          if (activeTerms.length > 0) {
+            matchedName = activeTerms.some((term) => linkedName.toLowerCase().includes(term));
+
+            for (const t of linkedTags) {
+              if (activeTerms.some((term) => t.toLowerCase().includes(term))) {
+                matchedTag = t;
+                break;
+              }
+            }
+          }
+
+          return {
+            name: linkedName,
+            phone: lPhone,
+            matchedTag,
+            matchedName,
+          };
+        })
+        .filter(Boolean) as ResolvedLinkBadge[];
+    }, [(item as any).LinkedContactPhone, contactsMap, activeTerms]);
 
     const isNotesMatchOnly = useMemo(() => {
-      const q = searchQuery.trim().toLowerCase();
-      if (!q) return false;
-
-      const terms = q.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
-      if (terms.length === 0) return false;
+      if (activeTerms.length === 0) return false;
 
       const contactName = (item.Name || '').toLowerCase();
       const contactPhone = item.Phonenumber || '';
       const contactTags = (item.Tags || '').toLowerCase();
       const contactDetails = (item.OtherDetails || '').toLowerCase();
 
-      const fullMatch = terms.every(
+      const fullMatch = activeTerms.every(
         (t) =>
           contactName.includes(t) ||
           contactPhone.includes(t) ||
@@ -89,7 +161,7 @@ const ContactCard = React.memo(
           contactDetails.includes(t)
       );
 
-      const matchedPrimaries = terms.every(
+      const matchedPrimaries = activeTerms.every(
         (t) =>
           contactName.includes(t) ||
           contactPhone.includes(t) ||
@@ -97,9 +169,8 @@ const ContactCard = React.memo(
       );
 
       return fullMatch && !matchedPrimaries && contactDetails.length > 0;
-    }, [searchQuery, item.Name, item.Phonenumber, item.Tags, item.OtherDetails]);
+    }, [activeTerms, item.Name, item.Phonenumber, item.Tags, item.OtherDetails]);
 
-    // Right action (Swipe Left): Delete
     const renderRightActions = (
       _progress: Animated.AnimatedInterpolation<number>,
       dragX: Animated.AnimatedInterpolation<number>
@@ -128,7 +199,6 @@ const ContactCard = React.memo(
       );
     };
 
-    // Left action (Swipe Right): Call
     const renderLeftActions = (
       _progress: Animated.AnimatedInterpolation<number>,
       dragX: Animated.AnimatedInterpolation<number>
@@ -182,7 +252,6 @@ const ContactCard = React.memo(
             delayLongPress={260}
           >
             <View style={styles.cardHeaderRow}>
-              {/* Checkbox for Batch Mode */}
               {isSelectionMode && (
                 <View style={styles.checkboxContainer}>
                   <Ionicons
@@ -255,20 +324,71 @@ const ContactCard = React.memo(
               )}
             </View>
 
-            {tagList.length > 0 && (
+            {/* Exactly Identical Base Styling & Exact Identical Search Highlighting */}
+            {(tagList.length > 0 || resolvedLinks.length > 0) && (
               <View style={styles.tagContainer}>
-                {tagList.map((tag, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={styles.tagPill}
-                    activeOpacity={0.7}
-                    onPress={() => onTagPress(tag)}
-                    disabled={isSelectionMode}
-                  >
-                    <Ionicons name="pricetag-outline" size={11} color="#2563EB" style={{ marginRight: 3 }} />
-                    <Text style={styles.tagText}>{tag}</Text>
-                  </TouchableOpacity>
-                ))}
+                {/* Category Tags */}
+                {tagList.map((tag, index) => {
+                  const isMatched = activeTerms.some((term) => tag.toLowerCase().includes(term));
+
+                  return (
+                    <TouchableOpacity
+                      key={`tag-${index}`}
+                      style={[styles.tagPill, isMatched && styles.tagPillMatched]}
+                      activeOpacity={0.7}
+                      onPress={() => onTagPress(tag)}
+                      disabled={isSelectionMode}
+                    >
+                      <Ionicons
+                        name="pricetag-outline"
+                        size={11}
+                        color={isMatched ? '#1D4ED8' : '#2563EB'}
+                        style={{ marginRight: 3 }}
+                      />
+                      <Text style={[styles.tagText, isMatched && styles.tagTextMatched]}>{tag}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                {/* Linked Contacts: Identical style & exact same highlight as tags */}
+                {resolvedLinks.map((link, lIdx) => {
+                  const target = contactsMap.get(link.phone);
+                  const isLinkedSearchMatch = Boolean(link.matchedTag || link.matchedName);
+
+                  return (
+                    <TouchableOpacity
+                      key={`link-${lIdx}`}
+                      style={[
+                        styles.tagPill,
+                        isLinkedSearchMatch && styles.tagPillMatched,
+                      ]}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        if (target) {
+                          onLinkedBadgePress(target);
+                        }
+                      }}
+                      disabled={isSelectionMode}
+                    >
+                      <Ionicons
+                        name="link"
+                        size={11}
+                        color={isLinkedSearchMatch ? '#1D4ED8' : '#2563EB'}
+                        style={{ marginRight: 3 }}
+                      />
+                      <Text
+                        style={[
+                          styles.tagText,
+                          isLinkedSearchMatch && styles.tagTextMatched,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {link.name}
+                        {link.matchedTag ? ` (${link.matchedTag})` : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             )}
 
@@ -303,21 +423,20 @@ export default function ContactsScreen({ navigation, route }: any) {
   const [userPhone, setUserPhone] = useState('9999999999');
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // Batch Multi-Select Mode state
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
 
-  // Bulk Add Tag Modal State with Chip Support & Auto-Suggest
   const [isTagModalVisible, setIsTagModalVisible] = useState(false);
   const [bulkTagInput, setBulkTagInput] = useState('');
   const [stagedBulkTags, setStagedBulkTags] = useState<string[]>([]);
 
-  // Bulk Remove Tag Draft Modal State
   const [isRemoveTagModalVisible, setIsRemoveTagModalVisible] = useState(false);
   const [originalUniqueTags, setOriginalUniqueTags] = useState<string[]>([]);
   const [activeDraftTags, setActiveDraftTags] = useState<string[]>([]);
 
-  // Track currently open swipeable card ref to auto-close on scroll/tab press
+  const [quickContactModalVisible, setQuickContactModalVisible] = useState(false);
+  const [quickContactTarget, setQuickContactTarget] = useState<Contact | null>(null);
+
   const openSwipeableRef = useRef<Swipeable | null>(null);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -334,13 +453,13 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, []);
 
-  useEffect(() => {
-    AsyncStorage.getItem('user_phone').then((phone) => {
-      if (phone) setUserPhone(phone);
-    });
+  const saveSearchState = useCallback((query: string, tag: string | null, starred: boolean) => {
+    AsyncStorage.setItem(
+      'active_contacts_search_state',
+      JSON.stringify({ query, tag, starred })
+    ).catch(() => {});
   }, []);
 
-  // Set header title with app name and icon
   useEffect(() => {
     navigation.setOptions({
       headerTitle: () => (
@@ -352,9 +471,12 @@ export default function ContactsScreen({ navigation, route }: any) {
     });
   }, [navigation]);
 
-  // Back button handling on Android: Exit modals / selection mode first
   useEffect(() => {
     const onBackPress = () => {
+      if (quickContactModalVisible) {
+        setQuickContactModalVisible(false);
+        return true;
+      }
       if (isTagModalVisible) {
         setIsTagModalVisible(false);
         return true;
@@ -372,7 +494,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     };
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => sub.remove();
-  }, [isSelectionMode, isTagModalVisible, isRemoveTagModalVisible]);
+  }, [isSelectionMode, isTagModalVisible, isRemoveTagModalVisible, quickContactModalVisible]);
 
   useEffect(() => {
     if (route.params?.selectedTag !== undefined) {
@@ -381,9 +503,10 @@ export default function ContactsScreen({ navigation, route }: any) {
       setIsStarredFilterActive(false);
       setSearchQuery(chosenTag);
       setShowSuggestions(false);
+      saveSearchState(chosenTag, chosenTag || null, false);
       navigation.setParams({ selectedTag: undefined });
     }
-  }, [route.params?.selectedTag, navigation]);
+  }, [route.params?.selectedTag, navigation, saveSearchState]);
 
   const showToast = useCallback(
     (message: string) => {
@@ -441,6 +564,50 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, [userPhone]);
 
+  const contactsMap = useMemo(() => {
+    const map = new Map<string, Contact>();
+    for (const c of allContacts) {
+      const cleanPhone = (c.Phonenumber || '').replace(/\D/g, '').slice(-10);
+      if (cleanPhone) {
+        map.set(cleanPhone, c);
+      }
+    }
+    return map;
+  }, [allContacts]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let isMounted = true;
+      const run = async () => {
+        const storedPhone = await AsyncStorage.getItem('user_phone');
+        const active = storedPhone || userPhone;
+        if (storedPhone) setUserPhone(storedPhone);
+
+        const savedState = await AsyncStorage.getItem('active_contacts_search_state');
+        if (savedState && isMounted) {
+          try {
+            const { query, tag, starred } = JSON.parse(savedState);
+            if (query !== undefined) setSearchQuery(query);
+            if (tag !== undefined) setSelectedTag(tag);
+            if (starred !== undefined) setIsStarredFilterActive(Boolean(starred));
+          } catch {
+            // Quiet fail
+          }
+        }
+
+        if (isMounted) {
+          if (allContacts.length === 0) setLoading(true);
+          await Promise.all([fetchPinnedTags(active), fetchContactsData(active)]);
+          if (isMounted) setLoading(false);
+        }
+      };
+      run();
+      return () => {
+        isMounted = false;
+      };
+    }, [userPhone, fetchPinnedTags, fetchContactsData, allContacts.length])
+  );
+
   const handlePullRefresh = useCallback(async () => {
     if (isSelectionMode) return;
     closeActiveSwipeable();
@@ -453,13 +620,14 @@ export default function ContactsScreen({ navigation, route }: any) {
       setIsStarredFilterActive(false);
       setShowSuggestions(false);
       Keyboard.dismiss();
+      saveSearchState('', null, false);
     }
 
     const storedPhone = await AsyncStorage.getItem('user_phone');
     const active = storedPhone || userPhone;
     await Promise.all([fetchPinnedTags(active), fetchContactsData(active)]);
     setRefreshing(false);
-  }, [userPhone, isSelectionMode, searchQuery, selectedTag, isStarredFilterActive, fetchPinnedTags, fetchContactsData, closeActiveSwipeable]);
+  }, [userPhone, isSelectionMode, searchQuery, selectedTag, isStarredFilterActive, fetchPinnedTags, fetchContactsData, closeActiveSwipeable, saveSearchState]);
 
   const handleResetAndRefresh = useCallback(async () => {
     closeActiveSwipeable();
@@ -470,6 +638,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     setSelectedContactIds(new Set());
     setShowSuggestions(false);
     Keyboard.dismiss();
+    saveSearchState('', null, false);
 
     try {
       sectionListRef.current?.scrollToLocation({
@@ -487,7 +656,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     setLoading(true);
     await Promise.all([fetchPinnedTags(active), fetchContactsData(active)]);
     setLoading(false);
-  }, [userPhone, fetchPinnedTags, fetchContactsData, closeActiveSwipeable]);
+  }, [userPhone, fetchPinnedTags, fetchContactsData, closeActiveSwipeable, saveSearchState]);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('tabPress', () => {
@@ -498,25 +667,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     });
     return unsubscribe;
   }, [navigation, handleResetAndRefresh, closeActiveSwipeable]);
-
-  useFocusEffect(
-    useCallback(() => {
-      let isMounted = true;
-      const run = async () => {
-        const storedPhone = await AsyncStorage.getItem('user_phone');
-        const active = storedPhone || userPhone;
-        if (isMounted) {
-          if (allContacts.length === 0) setLoading(true);
-          await Promise.all([fetchPinnedTags(active), fetchContactsData(active)]);
-          if (isMounted) setLoading(false);
-        }
-      };
-      run();
-      return () => {
-        isMounted = false;
-      };
-    }, [userPhone, fetchPinnedTags, fetchContactsData, allContacts.length])
-  );
 
   const handleToggleStar = useCallback(
     async (contact: Contact) => {
@@ -617,11 +767,10 @@ export default function ContactsScreen({ navigation, route }: any) {
     return [...tagResults, ...nameResults];
   }, [searchQuery, showSuggestions, allContacts]);
 
-  // Bulk add tag auto-suggestions matching standard Add/Edit Contact behavior with original capitalization
   const bulkTagSuggestions = useMemo(() => {
     const q = bulkTagInput.trim().toLowerCase();
     if (!q) return [];
-    
+
     const uniqueMap = new Map<string, string>();
     pinnedTags.forEach((pt) => uniqueMap.set(pt.toLowerCase(), pt));
     allContacts.forEach((c) => {
@@ -653,9 +802,25 @@ export default function ContactsScreen({ navigation, route }: any) {
     if (selectedTag && selectedTag.trim()) {
       const tagLower = selectedTag.trim().toLowerCase();
       result = result.filter((c) => {
-        if (!c.Tags) return false;
-        const currentItemTags = c.Tags.split(',').map((t) => t.trim().toLowerCase());
-        return currentItemTags.includes(tagLower);
+        if (c.Tags) {
+          const currentItemTags = c.Tags.split(',').map((t) => t.trim().toLowerCase());
+          if (currentItemTags.includes(tagLower)) return true;
+        }
+
+        const linkedPhones = ((c as any).LinkedContactPhone || '')
+          .split(',')
+          .map((p: string) => p.trim().slice(-10))
+          .filter(Boolean);
+
+        for (const lPhone of linkedPhones) {
+          const linkedPerson = contactsMap.get(lPhone);
+          if (linkedPerson?.Tags) {
+            const lTags = linkedPerson.Tags.split(',').map((t: string) => t.trim().toLowerCase());
+            if (lTags.includes(tagLower)) return true;
+          }
+        }
+
+        return false;
       });
     }
 
@@ -669,13 +834,34 @@ export default function ContactsScreen({ navigation, route }: any) {
         const contactTags = (c.Tags || '').toLowerCase();
         const contactDetails = (c.OtherDetails || '').toLowerCase();
 
-        return terms.every((term) => {
-          const nameMatch = contactName.includes(term);
-          const phoneMatch = contactPhone.includes(term);
-          const tagMatch = contactTags.includes(term);
-          const detailsMatch = contactDetails.includes(term);
+        const directMatch = terms.every(
+          (term) =>
+            contactName.includes(term) ||
+            contactPhone.includes(term) ||
+            contactTags.includes(term) ||
+            contactDetails.includes(term)
+        );
 
-          return nameMatch || phoneMatch || tagMatch || detailsMatch;
+        if (directMatch) return true;
+
+        const linkedPhones = ((c as any).LinkedContactPhone || '')
+          .split(',')
+          .map((p: string) => p.trim().slice(-10))
+          .filter(Boolean);
+
+        if (linkedPhones.length === 0) return false;
+
+        return terms.every((term) => {
+          return linkedPhones.some((lPhone: string) => {
+            const linkedPerson = contactsMap.get(lPhone);
+            if (!linkedPerson) return false;
+
+            const lName = (linkedPerson.Name || '').toLowerCase();
+            const lPhoneRaw = linkedPerson.Phonenumber || '';
+            const lTags = (linkedPerson.Tags || '').toLowerCase();
+
+            return lName.includes(term) || lPhoneRaw.includes(term) || lTags.includes(term);
+          });
         });
       });
     }
@@ -698,13 +884,12 @@ export default function ContactsScreen({ navigation, route }: any) {
       }
       return (a.Name || '').localeCompare(b.Name || '');
     });
-  }, [allContacts, isStarredFilterActive, selectedTag, searchQuery, isSelectionMode, selectedContactIds]);
+  }, [allContacts, isStarredFilterActive, selectedTag, searchQuery, isSelectionMode, selectedContactIds, contactsMap]);
 
   const sections = useMemo(() => {
     return [{ title: 'contacts', data: filteredContacts }];
   }, [filteredContacts]);
 
-  // Selection Logic
   const handleEnterSelectionMode = useCallback((initialId: number) => {
     closeActiveSwipeable();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -743,7 +928,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     setSelectedContactIds(new Set());
   }, []);
 
-  // Batch Star / Unstar
   const handleBulkToggleStar = useCallback(async () => {
     if (selectedContactIds.size === 0) return;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -773,7 +957,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, [selectedContactIds, allContacts, showToast, handleExitSelectionMode, fetchContactsData, userPhone]);
 
-  // Open Bulk Add Tag Modal
   const openBulkTagModal = useCallback(() => {
     if (selectedContactIds.size === 0) return;
     setBulkTagInput('');
@@ -781,7 +964,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     setIsTagModalVisible(true);
   }, [selectedContactIds.size]);
 
-  // Handle comma typing & staging for bulk tags
   const handleBulkTagChange = useCallback((text: string) => {
     if (text.endsWith(',')) {
       const newTag = text.replace(',', '').trim();
@@ -800,7 +982,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, []);
 
-  // Add auto-suggested tag on tap
   const handleSelectBulkTagSuggestion = useCallback((tagText: string) => {
     Haptics.selectionAsync();
     const clean = tagText.trim();
@@ -810,7 +991,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     setBulkTagInput('');
   }, [stagedBulkTags]);
 
-  // Execute Bulk Add Tag Application
   const handleExecuteBulkTag = useCallback(async () => {
     let tagsToAdd = [...stagedBulkTags];
     const leftover = bulkTagInput.trim();
@@ -894,7 +1074,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, [stagedBulkTags, bulkTagInput, selectedContactIds, showToast, handleExitSelectionMode, fetchContactsData, fetchPinnedTags, userPhone]);
 
-  // Open Bulk Remove Tag Modal (Draft Stage)
   const openBulkRemoveTagModal = useCallback(() => {
     if (selectedContactIds.size === 0) return;
 
@@ -919,7 +1098,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     setIsRemoveTagModalVisible(true);
   }, [selectedContactIds, allContacts]);
 
-  // Execute Bulk Remove Tag Changes & Clean Unused Pinned Tags (Enforcing Minimum 1 Tag Rule)
   const handleExecuteBulkRemoveTags = useCallback(async () => {
     if (activeDraftTags.length === 0) {
       Alert.alert('Action Blocked', 'Selected contacts must retain at least one tag.');
@@ -1004,7 +1182,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, [originalUniqueTags, activeDraftTags, selectedContactIds, showToast, handleExitSelectionMode, fetchContactsData, fetchPinnedTags, userPhone]);
 
-  // Batch Delete
   const handleBulkDelete = useCallback(() => {
     if (selectedContactIds.size === 0) return;
 
@@ -1045,12 +1222,14 @@ export default function ContactsScreen({ navigation, route }: any) {
     setIsStarredFilterActive(false);
     if (type === 'tag') {
       setSelectedTag(text);
+      saveSearchState(text, text, false);
     } else {
       setSelectedTag(null);
+      saveSearchState(text, null, false);
     }
     setShowSuggestions(false);
     Keyboard.dismiss();
-  }, [closeActiveSwipeable]);
+  }, [closeActiveSwipeable, saveSearchState]);
 
   const handleTagPress = useCallback((tag: string | null) => {
     closeActiveSwipeable();
@@ -1071,6 +1250,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       setSelectedTag(null);
       setSearchQuery('');
       setShowSuggestions(false);
+      saveSearchState('', null, false);
       return;
     }
 
@@ -1078,14 +1258,16 @@ export default function ContactsScreen({ navigation, route }: any) {
       if (prev === tag) {
         setSearchQuery('');
         setShowSuggestions(false);
+        saveSearchState('', null, false);
         return null;
       } else {
         setSearchQuery(tag);
         setShowSuggestions(false);
+        saveSearchState(tag, tag, false);
         return tag;
       }
     });
-  }, [closeActiveSwipeable]);
+  }, [closeActiveSwipeable, saveSearchState]);
 
   const handleToggleStarredTag = useCallback(() => {
     closeActiveSwipeable();
@@ -1103,8 +1285,12 @@ export default function ContactsScreen({ navigation, route }: any) {
     setSelectedTag(null);
     setSearchQuery('');
     setShowSuggestions(false);
-    setIsStarredFilterActive((prev) => !prev);
-  }, [closeActiveSwipeable]);
+    setIsStarredFilterActive((prev) => {
+      const next = !prev;
+      saveSearchState('', null, next);
+      return next;
+    });
+  }, [closeActiveSwipeable, saveSearchState]);
 
   const openTagsModal = useCallback(() => {
     closeActiveSwipeable();
@@ -1117,6 +1303,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         setSelectedTag(chosenTag || null);
         setSearchQuery(chosenTag);
         setShowSuggestions(false);
+        saveSearchState(chosenTag, chosenTag || null, false);
         try {
           sectionListRef.current?.scrollToLocation({
             sectionIndex: 0,
@@ -1129,7 +1316,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         }
       },
     });
-  }, [navigation, userPhone, closeActiveSwipeable]);
+  }, [navigation, userPhone, closeActiveSwipeable, saveSearchState]);
 
   const openManageTagsModal = useCallback(() => {
     closeActiveSwipeable();
@@ -1142,8 +1329,9 @@ export default function ContactsScreen({ navigation, route }: any) {
     setSelectedTag(null);
     setIsStarredFilterActive(false);
     setShowSuggestions(false);
+    saveSearchState('', null, false);
     searchInputRef.current?.focus();
-  }, []);
+  }, [saveSearchState]);
 
   const handleCall = useCallback((phoneNumber: string) => {
     const cleanNumber = phoneNumber.replace(/[^0-9+]/g, '');
@@ -1178,6 +1366,12 @@ export default function ContactsScreen({ navigation, route }: any) {
     [showToast]
   );
 
+  const handleOpenLinkedBadgeModal = useCallback((targetContact: Contact) => {
+    Haptics.selectionAsync();
+    setQuickContactTarget(targetContact);
+    setQuickContactModalVisible(true);
+  }, []);
+
   const renderContactCard = useCallback(
     ({ item }: { item: Contact }) => (
       <ContactCard
@@ -1185,6 +1379,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         isSelectionMode={isSelectionMode}
         isSelected={selectedContactIds.has(item.id)}
         searchQuery={searchQuery}
+        contactsMap={contactsMap}
         onPress={() => {
           if (isSelectionMode) {
             handleToggleSelectCard(item.id);
@@ -1204,6 +1399,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         onTagPress={handleTagPress}
         onCopyPhone={handleCopyPhone}
         onToggleStar={handleToggleStar}
+        onLinkedBadgePress={handleOpenLinkedBadgeModal}
         onSwipeOpen={(ref) => {
           if (openSwipeableRef.current && openSwipeableRef.current !== ref) {
             openSwipeableRef.current.close();
@@ -1216,6 +1412,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       isSelectionMode,
       selectedContactIds,
       searchQuery,
+      contactsMap,
       handleToggleSelectCard,
       handleEnterSelectionMode,
       navigation,
@@ -1226,6 +1423,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       handleTagPress,
       handleCopyPhone,
       handleToggleStar,
+      handleOpenLinkedBadgeModal,
       closeActiveSwipeable,
     ]
   );
@@ -1252,6 +1450,9 @@ export default function ContactsScreen({ navigation, route }: any) {
               setShowSuggestions(true);
               if (selectedTag && text !== selectedTag) {
                 setSelectedTag(null);
+                saveSearchState(text, null, isStarredFilterActive);
+              } else {
+                saveSearchState(text, selectedTag, isStarredFilterActive);
               }
               if (isStarredFilterActive) {
                 setIsStarredFilterActive(false);
@@ -1400,9 +1601,9 @@ export default function ContactsScreen({ navigation, route }: any) {
     handleToggleStarredTag,
     handleSelectSuggestion,
     closeActiveSwipeable,
+    saveSearchState,
   ]);
 
-  // Sticky Bar: Switches to Selection Controller when in Batch Mode
   const renderStickySectionHeader = useCallback(() => {
     if (isSelectionMode) {
       const isAllSelected = selectedContactIds.size === filteredContacts.length && filteredContacts.length > 0;
@@ -1499,6 +1700,27 @@ export default function ContactsScreen({ navigation, route }: any) {
     );
   }, [loading, searchQuery, selectedTag, isStarredFilterActive, handleClearSearch, navigation, userPhone]);
 
+  const quickTargetLinkedContacts = useMemo(() => {
+    if (!quickContactTarget) return [];
+    const linkedField = (quickContactTarget as any).LinkedContactPhone;
+    if (!linkedField) return [];
+
+    const phones = linkedField
+      .split(',')
+      .map((p: string) => p.trim().slice(-10))
+      .filter(Boolean);
+
+    return phones
+      .map((p: string) => contactsMap.get(p))
+      .filter(Boolean) as Contact[];
+  }, [quickContactTarget, contactsMap]);
+
+  const activeTerms = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return q.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+  }, [searchQuery]);
+
   return (
     <View style={styles.container}>
       {loading && allContacts.length === 0 ? (
@@ -1582,7 +1804,140 @@ export default function ContactsScreen({ navigation, route }: any) {
         </View>
       )}
 
-      {/* Custom Bulk Add Tag Modal matching Add/Edit Contact style */}
+      {/* Quick View Linked Contact Modal with Unified Colors & Highlighting */}
+      <Modal
+        visible={quickContactModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setQuickContactModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.quickModalCard}>
+            <View style={styles.quickModalHeader}>
+              <View style={styles.quickAvatar}>
+                <Ionicons name="person" size={20} color="#2563EB" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.quickModalName} numberOfLines={1}>
+                  {quickContactTarget?.Name}
+                </Text>
+                <Text style={styles.quickModalPhone}>{quickContactTarget?.Phonenumber}</Text>
+              </View>
+
+              {/* Action Icons */}
+              <View style={styles.quickHeaderActionsRow}>
+                <TouchableOpacity
+                  style={[styles.quickIconButton, styles.quickWhatsAppButton]}
+                  onPress={() => {
+                    setQuickContactModalVisible(false);
+                    if (quickContactTarget?.Phonenumber) {
+                      handleWhatsApp(quickContactTarget.Phonenumber);
+                    }
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="logo-whatsapp" size={18} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.quickIconButton, styles.quickCallButton]}
+                  onPress={() => {
+                    setQuickContactModalVisible(false);
+                    if (quickContactTarget?.Phonenumber) {
+                      handleCall(quickContactTarget.Phonenumber);
+                    }
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="call" size={17} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.quickIconButton, styles.quickEditButton]}
+                  onPress={() => {
+                    setQuickContactModalVisible(false);
+                    if (quickContactTarget?.id) {
+                      navigation.navigate('EditContact', { id: quickContactTarget.id, userPhone });
+                    }
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="create-outline" size={18} color="#2563EB" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setQuickContactModalVisible(false)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={{ marginLeft: 4 }}
+                >
+                  <Ionicons name="close" size={22} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Display Both Category Tags and Linked Contacts with exact same styles */}
+            <View style={styles.quickTagsContainer}>
+              {/* Category Tags */}
+              {quickContactTarget?.Tags &&
+                quickContactTarget.Tags.split(',')
+                  .map((t) => t.trim())
+                  .filter(Boolean)
+                  .map((t, idx) => {
+                    const isMatched = activeTerms.some((term) => t.toLowerCase().includes(term));
+
+                    return (
+                      <TouchableOpacity
+                        key={`quick-tag-${idx}`}
+                        style={[styles.tagPill, isMatched && styles.tagPillMatched]}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          setQuickContactModalVisible(false);
+                          handleTagPress(t);
+                        }}
+                      >
+                        <Ionicons
+                          name="pricetag-outline"
+                          size={11}
+                          color={isMatched ? '#1D4ED8' : '#2563EB'}
+                          style={{ marginRight: 3 }}
+                        />
+                        <Text style={[styles.tagText, isMatched && styles.tagTextMatched]}>{t}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+
+              {/* Linked Contacts of this Contact: Same pill styling and same highlight */}
+              {quickTargetLinkedContacts.map((lContact, lIdx) => {
+                const lName = lContact.Name || 'Contact';
+                const isMatched = activeTerms.some((term) => lName.toLowerCase().includes(term));
+
+                return (
+                  <TouchableOpacity
+                    key={`quick-linked-${lIdx}`}
+                    style={[styles.tagPill, isMatched && styles.tagPillMatched]}
+                    activeOpacity={0.75}
+                    onPress={() => {
+                      setQuickContactTarget(lContact);
+                    }}
+                  >
+                    <Ionicons
+                      name="link"
+                      size={11}
+                      color={isMatched ? '#1D4ED8' : '#2563EB'}
+                      style={{ marginRight: 3 }}
+                    />
+                    <Text style={[styles.tagText, isMatched && styles.tagTextMatched]} numberOfLines={1}>
+                      {lName}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Bulk Add Tag Modal */}
       <Modal
         visible={isTagModalVisible}
         transparent={true}
@@ -1596,7 +1951,6 @@ export default function ContactsScreen({ navigation, route }: any) {
               Type tags for {selectedContactIds.size} selected contact{selectedContactIds.size > 1 ? 's' : ''}:
             </Text>
 
-            {/* Staged Tag Chips Container */}
             {stagedBulkTags.length > 0 && (
               <View style={styles.stagedChipsWrapContainer}>
                 {stagedBulkTags.map((stagedTag, idx) => (
@@ -1626,7 +1980,6 @@ export default function ContactsScreen({ navigation, route }: any) {
               autoCorrect={false}
             />
 
-            {/* Auto-suggest dropdown matching standard Add/Edit Contact behavior */}
             {bulkTagSuggestions.length > 0 && (
               <View style={styles.modalSuggestionsDropdown}>
                 {bulkTagSuggestions.map((sug, idx) => (
@@ -1663,7 +2016,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         </View>
       </Modal>
 
-      {/* Bulk Remove Tag Draft Selector Modal */}
+      {/* Bulk Remove Tag Selector Modal */}
       <Modal
         visible={isRemoveTagModalVisible}
         transparent={true}
@@ -1705,12 +2058,11 @@ export default function ContactsScreen({ navigation, route }: any) {
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              {/* Uniform blue theme applied here, disabled if 0 tags remain */}
               <TouchableOpacity
                 style={[
                   styles.modalBtn,
                   styles.modalApplyBtn,
-                  activeDraftTags.length === 0 && { opacity: 0.5 }
+                  activeDraftTags.length === 0 && { opacity: 0.5 },
                 ]}
                 onPress={handleExecuteBulkRemoveTags}
                 disabled={activeDraftTags.length === 0}
@@ -2087,10 +2439,19 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
     gap: 3,
   },
+  tagPillMatched: {
+    backgroundColor: '#DBEAFE',
+    borderColor: '#3B82F6',
+    borderWidth: 1.5,
+  },
   tagText: {
     color: '#081b50',
     fontSize: 12.3,
     fontWeight: '600',
+  },
+  tagTextMatched: {
+    color: '#1D4ED8',
+    fontWeight: '800',
   },
   notesContainer: {
     flexDirection: 'row',
@@ -2157,6 +2518,70 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
+  },
+  quickModalCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+  },
+  quickModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  quickAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickModalName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  quickModalPhone: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  quickHeaderActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  quickIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickWhatsAppButton: {
+    backgroundColor: '#25D366',
+  },
+  quickCallButton: {
+    backgroundColor: '#2563EB',
+  },
+  quickEditButton: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  quickTagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
   },
   modalCard: {
     width: '100%',

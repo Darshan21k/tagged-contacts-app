@@ -86,7 +86,7 @@ export default function ProfileScreen({ navigation }: any) {
         }
 
         const auth = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Verify your identity to enable App Lock',
+          promptMessage: 'Verify to enable App Lock',
           fallbackLabel: 'Use Device PIN',
           cancelLabel: 'Cancel',
           disableDeviceFallback: false,
@@ -99,7 +99,7 @@ export default function ProfileScreen({ navigation }: any) {
         }
       } else {
         const auth = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Verify identity to turn off App Lock',
+          promptMessage: 'Verify to turn off App Lock',
           fallbackLabel: 'Use Device PIN',
           cancelLabel: 'Cancel',
           disableDeviceFallback: false,
