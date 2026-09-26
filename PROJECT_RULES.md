@@ -4,7 +4,7 @@ Current Stack:
 - Expo SDK, React Native, TypeScript
 - Supabase (PostgreSQL) tables:
   - Userprofile (Name, Phonenumber, Mail_id, Login_Access, User_type)
-  - Contacts_Table (id, Name, Phonenumber, Tags, OtherDetails, Userphonenumber, is_starred)
+  - Contacts_Table (id, Name, Phonenumber, Tags, OtherDetails, Userphonenumber, is_starred, LinkedContactPhone)
   - PinnedTags (Tagname, Userphonenumber, Pinned)
 - Storage & Plugins: AsyncStorage, expo-status-bar, expo-clipboard, expo-haptics, expo-linking, Ionicons, react-native-gesture-handler
 

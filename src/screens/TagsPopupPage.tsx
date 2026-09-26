@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -17,30 +17,34 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { PinnedTag } from '../types';
 
-interface TagItem {
+interface ManageTagItem {
+  id: string;
   name: string;
+  type: 'tag' | 'link';
+  phone?: string;
   isPinned: boolean;
 }
 
 export default function TagsPopupPage({ route, navigation }: any) {
   const userPhone = route.params?.userPhone || '9999999999';
 
-  const [tagList, setTagList] = useState<TagItem[]>([]);
-  const [filteredList, setFilteredList] = useState<TagItem[]>([]);
+  const [activeTab, setActiveTab] = useState<'tags' | 'links'>('tags');
+  const [itemsList, setItemsList] = useState<ManageTagItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
   const loadTagsAndPinnedStatus = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Fetch all tags from Contacts_Table
+      // 1. Fetch contacts
       const { data: contactsData, error: contactsError } = await supabase
         .from('Contacts_Table')
-        .select('Tags')
+        .select('Name, Phonenumber, Tags, LinkedContactPhone')
         .eq('Userphonenumber', userPhone);
 
       if (contactsError) throw contactsError;
 
+      // Category tags
       const rawTags = (contactsData || [])
         .filter((c: any) => c.Tags && c.Tags.trim().length > 0)
         .flatMap((c: any) => c.Tags.split(','))
@@ -51,7 +55,26 @@ export default function TagsPopupPage({ route, navigation }: any) {
         (lower) => rawTags.find((t) => t.toLowerCase() === lower) || lower
       );
 
-      // 2. Fetch PinnedTags
+      // Referenced linked contacts ONLY
+      const referencedPhones = new Set<string>();
+      (contactsData || []).forEach((c: any) => {
+        if (c.LinkedContactPhone) {
+          c.LinkedContactPhone.split(',').forEach((p: string) => {
+            const clean = p.trim().slice(-10);
+            if (clean) referencedPhones.add(clean);
+          });
+        }
+      });
+
+      const contactsMap = new Map<string, string>();
+      (contactsData || []).forEach((c: any) => {
+        const cleanPhone = (c.Phonenumber || '').replace(/\D/g, '').slice(-10);
+        if (cleanPhone) {
+          contactsMap.set(cleanPhone, c.Name || 'Contact');
+        }
+      });
+
+      // 2. Fetch Pinned items
       const { data: pinData, error: pinError } = await supabase
         .from('PinnedTags')
         .select('*')
@@ -62,23 +85,27 @@ export default function TagsPopupPage({ route, navigation }: any) {
 
       const pinnedSet = new Set((pinData || []).map((p: PinnedTag) => p.Tagname.toLowerCase()));
 
-      const combined: TagItem[] = uniqueTagNames
-        .map((name) => ({
-          name,
-          isPinned: pinnedSet.has(name.toLowerCase()),
-        }))
-        .sort((a, b) => {
-          // Pinned tags first, then alphabetical
-          if (a.isPinned === b.isPinned) {
-            return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-          }
-          return a.isPinned ? -1 : 1;
-        });
+      const tagItems: ManageTagItem[] = uniqueTagNames.map((name) => ({
+        id: `tag-${name}`,
+        name,
+        type: 'tag',
+        isPinned: pinnedSet.has(name.toLowerCase()),
+      }));
 
-      setTagList(combined);
-      setFilteredList(combined);
+      const linkItems: ManageTagItem[] = Array.from(referencedPhones).map((phone) => {
+        const name = contactsMap.get(phone) || `Contact (${phone})`;
+        return {
+          id: `link-${phone}`,
+          name,
+          phone,
+          type: 'link',
+          isPinned: pinnedSet.has(name.toLowerCase()),
+        };
+      });
+
+      setItemsList([...tagItems, ...linkItems]);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to load tags');
+      Alert.alert('Error', err.message || 'Failed to load tags and links');
     } finally {
       setLoading(false);
     }
@@ -88,24 +115,34 @@ export default function TagsPopupPage({ route, navigation }: any) {
     loadTagsAndPinnedStatus();
   }, [loadTagsAndPinnedStatus]);
 
-  const handleSearch = (text: string) => {
-    setSearchQuery(text);
-    const query = text.trim().toLowerCase();
-    if (!query) {
-      setFilteredList(tagList);
-      return;
-    }
-    setFilteredList(tagList.filter((item) => item.name.toLowerCase().includes(query)));
-  };
+  const tagCounts = useMemo(() => {
+    const tagsCount = itemsList.filter((it) => it.type === 'tag').length;
+    const linksCount = itemsList.filter((it) => it.type === 'link').length;
+    return { tagsCount, linksCount };
+  }, [itemsList]);
 
-  const togglePin = async (item: TagItem) => {
+  const filteredItems = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const sourceList = itemsList.filter((it) => it.type === (activeTab === 'tags' ? 'tag' : 'link'));
+
+    const filtered = q
+      ? sourceList.filter(
+          (it) => it.name.toLowerCase().includes(q) || (it.phone && it.phone.includes(q))
+        )
+      : sourceList;
+
+    return filtered.sort((a, b) => {
+      if (a.isPinned === b.isPinned) return a.name.localeCompare(b.name);
+      return a.isPinned ? -1 : 1;
+    });
+  }, [itemsList, searchQuery, activeTab]);
+
+  const togglePin = async (item: ManageTagItem) => {
     const nextPinned = !item.isPinned;
 
-    // Optimistic local update
-    const updater = (prev: TagItem[]) =>
-      prev.map((t) => (t.name === item.name ? { ...t, isPinned: nextPinned } : t));
-    setTagList(updater);
-    setFilteredList(updater);
+    setItemsList((prev) =>
+      prev.map((t) => (t.id === item.id ? { ...t, isPinned: nextPinned } : t))
+    );
 
     try {
       if (nextPinned) {
@@ -123,7 +160,7 @@ export default function TagsPopupPage({ route, navigation }: any) {
           .eq('Userphonenumber', userPhone)
           .eq('Tagname', item.name);
       }
-    } catch (err: any) {
+    } catch {
       Alert.alert('Error', 'Failed to update pin state');
       loadTagsAndPinnedStatus();
     }
@@ -145,18 +182,60 @@ export default function TagsPopupPage({ route, navigation }: any) {
 
         <View style={styles.popupFrame}>
           <View style={styles.headerRow}>
-            <Text style={styles.headerTitle}>Manage Pinned Tags</Text>
-            <TouchableOpacity onPress={handleClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Text style={styles.headerTitle}>Manage Pinned Items</Text>
+            <TouchableOpacity
+              onPress={handleClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
               <Text style={styles.closeButton}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Segmented Tab Controls */}
+          <View style={styles.tabsContainer}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'tags' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('tags')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="pricetag-outline"
+                size={13}
+                color={activeTab === 'tags' ? '#2563EB' : '#64748B'}
+              />
+              <Text
+                style={[styles.tabText, activeTab === 'tags' && styles.tabTextActive]}
+              >
+                Tags ({tagCounts.tagsCount})
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'links' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('links')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="link"
+                size={13}
+                color={activeTab === 'links' ? '#2563EB' : '#64748B'}
+              />
+              <Text
+                style={[styles.tabText, activeTab === 'links' && styles.tabTextActive]}
+              >
+                Linked Contacts ({tagCounts.linksCount})
+              </Text>
             </TouchableOpacity>
           </View>
 
           <TextInput
             style={styles.searchEntry}
-            placeholder="Search tags to pin..."
-            placeholderTextColor="#888"
+            placeholder={
+              activeTab === 'tags' ? 'Search tags to pin...' : 'Search linked contacts to pin...'
+            }
+            placeholderTextColor="#94A3B8"
             value={searchQuery}
-            onChangeText={handleSearch}
+            onChangeText={setSearchQuery}
             autoCapitalize="none"
           />
 
@@ -164,20 +243,29 @@ export default function TagsPopupPage({ route, navigation }: any) {
             <ActivityIndicator color="#2563EB" style={{ marginTop: 30 }} />
           ) : (
             <FlatList
-              data={filteredList}
-              keyExtractor={(item) => item.name}
+              data={filteredItems}
+              keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContent}
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
                 <View style={styles.tagRow}>
                   <View style={styles.tagInfo}>
                     <Ionicons
-                      name={item.isPinned ? 'pin' : 'pricetag-outline'}
-                      size={18}
+                      name={
+                        item.isPinned
+                          ? 'pin'
+                          : item.type === 'tag'
+                          ? 'pricetag-outline'
+                          : 'link'
+                      }
+                      size={16}
                       color={item.isPinned ? '#2563EB' : '#94A3B8'}
                       style={styles.tagIcon}
                     />
-                    <Text style={styles.tagLabel}>{item.name}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.tagLabel}>{item.name}</Text>
+                      {item.phone && <Text style={styles.phoneSub}>{item.phone}</Text>}
+                    </View>
                   </View>
                   <Switch
                     value={item.isPinned}
@@ -189,7 +277,9 @@ export default function TagsPopupPage({ route, navigation }: any) {
               )}
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
-                  <Text style={styles.emptyText}>No tags found</Text>
+                  <Text style={styles.emptyText}>
+                    No {activeTab === 'tags' ? 'tags' : 'linked contacts'} found
+                  </Text>
                 </View>
               }
             />
@@ -210,7 +300,7 @@ const styles = StyleSheet.create({
   backdropTouch: { flex: 1 },
   popupFrame: {
     maxHeight: 520,
-    minHeight: 320,
+    minHeight: 340,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -232,16 +322,49 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#1E293B',
+    color: '#0F172A',
     textAlign: 'center',
     flex: 1,
     marginLeft: 24,
   },
   closeButton: {
-    fontSize: 22,
-    color: '#DC2626',
+    fontSize: 20,
+    color: '#64748B',
     fontWeight: 'bold',
     paddingHorizontal: 4,
+  },
+  tabsContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 12,
+    gap: 4,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  tabButtonActive: {
+    backgroundColor: '#FFFFFF',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+  },
+  tabText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  tabTextActive: {
+    color: '#2563EB',
+    fontWeight: '700',
   },
   searchEntry: {
     height: 44,
@@ -249,7 +372,7 @@ const styles = StyleSheet.create({
     borderColor: '#CBD5E1',
     borderRadius: 10,
     paddingHorizontal: 12,
-    fontSize: 15,
+    fontSize: 14.5,
     color: '#0F172A',
     backgroundColor: '#F8FAFC',
     marginBottom: 10,
@@ -265,7 +388,8 @@ const styles = StyleSheet.create({
   },
   tagInfo: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
   tagIcon: { marginRight: 10 },
-  tagLabel: { fontSize: 16, color: '#334155', fontWeight: '500' },
+  tagLabel: { fontSize: 14, color: '#334155', fontWeight: '600' },
+  phoneSub: { fontSize: 11, color: '#64748B', fontWeight: '500' },
   emptyContainer: { alignItems: 'center', marginTop: 30 },
   emptyText: { fontSize: 14, color: '#94A3B8' },
 });

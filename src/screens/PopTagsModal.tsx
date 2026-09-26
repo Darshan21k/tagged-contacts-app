@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,28 +12,38 @@ import {
   Platform,
   Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
+
+interface TagFilterItem {
+  id: string;
+  name: string;
+  type: 'tag' | 'link';
+  phone?: string;
+}
 
 export default function PopTagsModal({ route, navigation }: any) {
   const userPhone = route.params?.userPhone || '9999999999';
   const onSelectTag = route.params?.onSelectTag;
 
-  const [allTags, setAllTags] = useState<string[]>([]);
-  const [filteredTags, setFilteredTags] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<'tags' | 'links'>('tags');
+  const [allTags, setAllTags] = useState<TagFilterItem[]>([]);
+  const [allLinkedPeople, setAllLinkedPeople] = useState<TagFilterItem[]>([]);
   const [searchFilter, setSearchFilter] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const loadTags = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('Contacts_Table')
-        .select('Tags')
+        .select('Name, Phonenumber, Tags, LinkedContactPhone')
         .eq('Userphonenumber', userPhone);
 
       if (error) throw error;
 
       if (data) {
+        // 1. Extract Category Tags
         const rawTags = data
           .filter((c: any) => c.Tags && c.Tags.trim().length > 0)
           .flatMap((c: any) => c.Tags.split(','))
@@ -48,44 +58,75 @@ export default function PopTagsModal({ route, navigation }: any) {
           }
         });
 
-        const sortedTags = Array.from(uniqueMap.values()).sort((a, b) =>
-          a.localeCompare(b, undefined, { sensitivity: 'base' })
-        );
+        const categoryTagItems: TagFilterItem[] = Array.from(uniqueMap.values())
+          .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+          .map((name) => ({
+            id: `tag-${name}`,
+            name,
+            type: 'tag',
+          }));
 
-        setAllTags(sortedTags);
-        setFilteredTags(sortedTags);
+        // 2. Extract ONLY contacts referenced in LinkedContactPhone
+        const referencedPhones = new Set<string>();
+        data.forEach((c: any) => {
+          if (c.LinkedContactPhone) {
+            c.LinkedContactPhone.split(',').forEach((p: string) => {
+              const clean = p.trim().slice(-10);
+              if (clean) referencedPhones.add(clean);
+            });
+          }
+        });
+
+        const contactsMap = new Map<string, string>();
+        data.forEach((c: any) => {
+          const cleanPhone = (c.Phonenumber || '').replace(/\D/g, '').slice(-10);
+          if (cleanPhone) {
+            contactsMap.set(cleanPhone, c.Name || 'Contact');
+          }
+        });
+
+        const linkedPeopleItems: TagFilterItem[] = Array.from(referencedPhones)
+          .map((phone) => ({
+            id: `link-${phone}`,
+            name: contactsMap.get(phone) || `Contact (${phone})`,
+            phone,
+            type: 'link' as const,
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+        setAllTags(categoryTagItems);
+        setAllLinkedPeople(linkedPeopleItems);
       }
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to fetch tags');
+      Alert.alert('Error', err.message || 'Failed to fetch tags and links');
     } finally {
       setLoading(false);
     }
   }, [userPhone]);
 
   useEffect(() => {
-    loadTags();
-  }, [loadTags]);
+    loadData();
+  }, [loadData]);
 
-  const handleTagTextChanged = (text: string) => {
-    setSearchFilter(text);
-    const filter = text.trim().toLowerCase();
+  const filteredItems = useMemo(() => {
+    const q = searchFilter.trim().toLowerCase();
+    const sourceList = activeTab === 'tags' ? allTags : allLinkedPeople;
 
-    if (!filter) {
-      setFilteredTags(allTags);
-      return;
-    }
+    if (!q) return sourceList;
 
-    const filtered = allTags.filter((tag) => tag.toLowerCase().includes(filter));
-    setFilteredTags(filtered);
-  };
+    return sourceList.filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) || (item.phone && item.phone.includes(q))
+    );
+  }, [allTags, allLinkedPeople, searchFilter, activeTab]);
 
   const handleClose = () => {
     navigation.goBack();
   };
 
-  const handleTagTapped = (tagName: string) => {
+  const handleItemTapped = (item: TagFilterItem) => {
     if (onSelectTag) {
-      onSelectTag(tagName);
+      onSelectTag(item.name);
     }
     navigation.goBack();
   };
@@ -103,7 +144,7 @@ export default function PopTagsModal({ route, navigation }: any) {
 
         <View style={styles.popupFrame}>
           <View style={styles.headerRow}>
-            <Text style={styles.headerTitle}>Select Tag</Text>
+            <Text style={styles.headerTitle}>Select Tag / Contact</Text>
             <TouchableOpacity
               onPress={handleClose}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -112,12 +153,51 @@ export default function PopTagsModal({ route, navigation }: any) {
             </TouchableOpacity>
           </View>
 
+          {/* Segmented Tab Controls */}
+          <View style={styles.tabsContainer}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'tags' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('tags')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="pricetag-outline"
+                size={13}
+                color={activeTab === 'tags' ? '#2563EB' : '#64748B'}
+              />
+              <Text
+                style={[styles.tabText, activeTab === 'tags' && styles.tabTextActive]}
+              >
+                Tags ({allTags.length})
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'links' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('links')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="link"
+                size={13}
+                color={activeTab === 'links' ? '#2563EB' : '#64748B'}
+              />
+              <Text
+                style={[styles.tabText, activeTab === 'links' && styles.tabTextActive]}
+              >
+                Linked Contacts ({allLinkedPeople.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           <TextInput
             style={styles.searchEntry}
-            placeholder="Enter tag..."
-            placeholderTextColor="#888"
+            placeholder={
+              activeTab === 'tags' ? 'Search category tags...' : 'Search linked contacts...'
+            }
+            placeholderTextColor="#94A3B8"
             value={searchFilter}
-            onChangeText={handleTagTextChanged}
+            onChangeText={setSearchFilter}
             autoCapitalize="none"
           />
 
@@ -125,22 +205,33 @@ export default function PopTagsModal({ route, navigation }: any) {
             <ActivityIndicator color="#2563EB" style={{ marginTop: 30 }} />
           ) : (
             <FlatList
-              data={filteredTags}
-              keyExtractor={(item, index) => `${item}_${index}`}
+              data={filteredItems}
+              keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContent}
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={styles.tagFrame}
                   activeOpacity={0.7}
-                  onPress={() => handleTagTapped(item)}
+                  onPress={() => handleItemTapped(item)}
                 >
-                  <Text style={styles.tagLabel}>{item}</Text>
+                  <View style={styles.itemRow}>
+                    <Ionicons
+                      name={item.type === 'tag' ? 'pricetag-outline' : 'link'}
+                      size={14}
+                      color="#2563EB"
+                      style={{ marginRight: 8 }}
+                    />
+                    <Text style={styles.tagLabel}>{item.name}</Text>
+                  </View>
+                  {item.phone && <Text style={styles.phoneSub}>{item.phone}</Text>}
                 </TouchableOpacity>
               )}
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
-                  <Text style={styles.emptyText}>No tags found</Text>
+                  <Text style={styles.emptyText}>
+                    No {activeTab === 'tags' ? 'tags' : 'linked contacts'} found
+                  </Text>
                 </View>
               }
             />
@@ -164,15 +255,15 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   popupFrame: {
-    maxHeight: 450,
-    minHeight: 280,
+    maxHeight: 520,
+    minHeight: 340,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     marginHorizontal: 15,
     marginBottom: Platform.OS === 'ios' ? 25 : 15,
     borderRadius: 20,
-    padding: 15,
+    padding: 16,
     elevation: 8,
     shadowColor: '#000',
     shadowOpacity: 0.25,
@@ -186,26 +277,59 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333333',
+    fontWeight: '700',
+    color: '#0F172A',
     textAlign: 'center',
     flex: 1,
     marginLeft: 24,
   },
   closeButton: {
-    fontSize: 22,
-    color: 'red',
+    fontSize: 20,
+    color: '#64748B',
     fontWeight: 'bold',
     paddingHorizontal: 4,
   },
+  tabsContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 12,
+    gap: 4,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  tabButtonActive: {
+    backgroundColor: '#FFFFFF',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+  },
+  tabText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  tabTextActive: {
+    color: '#2563EB',
+    fontWeight: '700',
+  },
   searchEntry: {
-    height: 45,
+    height: 44,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#CBD5E1',
     borderRadius: 10,
     paddingHorizontal: 12,
-    fontSize: 15,
-    color: '#333333',
+    fontSize: 14.5,
+    color: '#0F172A',
     backgroundColor: '#F8FAFC',
     marginBottom: 10,
   },
@@ -213,16 +337,30 @@ const styles = StyleSheet.create({
     paddingBottom: 15,
   },
   tagFrame: {
-    backgroundColor: '#F9F9F9',
+    backgroundColor: '#F8FAFC',
     borderRadius: 10,
-    padding: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     marginVertical: 4,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
   tagLabel: {
-    fontSize: 16,
-    color: '#222222',
+    fontSize: 14,
+    color: '#1E293B',
+    fontWeight: '600',
+  },
+  phoneSub: {
+    fontSize: 12,
+    color: '#64748B',
     fontWeight: '500',
   },
   emptyContainer: {

@@ -6,6 +6,7 @@ export interface Contact {
   OtherDetails?: string;
   Userphonenumber: string;
   is_starred?: boolean;
+  created_at?: string;
 }
 
 export interface UserProfile {

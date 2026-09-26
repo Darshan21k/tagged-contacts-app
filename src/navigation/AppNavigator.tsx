@@ -13,6 +13,7 @@ import EditContactPage from '../screens/EditContactPage';
 import PopTagsModal from '../screens/PopTagsModal';
 import AdminPage from '../screens/AdminPage';
 import TagsPopupPage from '../screens/TagsPopupPage';
+import RecentActivityScreen from '../screens/RecentActivityScreen';
 
 import HomeScreen from '../screens/HomeScreen';
 import ContactsScreen from '../screens/ContactsScreen';
@@ -117,6 +118,7 @@ export default function AppNavigator() {
       <Stack.Screen name="AccessBlocked" component={AccessBlockedPage} options={{ headerShown: false }} />
       <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
       <Stack.Screen name="EditContact" component={EditContactPage} options={{ title: 'Edit Contact' }} />
+      <Stack.Screen name="RecentActivity" component={RecentActivityScreen} options={{ title: 'Recent Activity', headerBackTitle: 'Back', headerStyle: { backgroundColor: '#F8FAFC' }, headerTintColor: '#0F172A', headerTitleStyle: { fontWeight: '700' },}}/>
       <Stack.Screen
         name="PopTags"
         component={PopTagsModal}
