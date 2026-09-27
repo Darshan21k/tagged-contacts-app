@@ -24,7 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { supabase } from '../services/supabase';
-import { Contact } from '../types';
+import { Contact, FollowupItem } from '../types';
 
 interface ResolvedLinkBadge {
   name: string;
@@ -49,6 +49,7 @@ interface ContactCardProps {
   item: Contact;
   isSelectionMode: boolean;
   isSelected: boolean;
+  hasActiveFollowup: boolean;
   onPress: () => void;
   onLongPress: () => void;
   onCall: (phone: string) => void;
@@ -57,6 +58,8 @@ interface ContactCardProps {
   onTagPress: (tag: string) => void;
   onCopyPhone: (phone: string) => void;
   onToggleStar: (contact: Contact) => void;
+  onFollowupBellPress: (contact: Contact) => void;
+  onSwipeFollowupPress: (contact: Contact, hasActive: boolean) => void;
   searchQuery: string;
   activeTerms: string[];
   onSwipeOpen: (ref: Swipeable) => void;
@@ -70,6 +73,7 @@ const ContactCard = React.memo(
     item,
     isSelectionMode,
     isSelected,
+    hasActiveFollowup,
     onPress,
     onLongPress,
     onCall,
@@ -78,6 +82,8 @@ const ContactCard = React.memo(
     onTagPress,
     onCopyPhone,
     onToggleStar,
+    onFollowupBellPress,
+    onSwipeFollowupPress,
     activeTerms,
     onSwipeOpen,
     contactsMap,
@@ -215,23 +221,32 @@ const ContactCard = React.memo(
     ) => {
       if (isSelectionMode) return null;
       const trans = dragX.interpolate({
-        inputRange: [0, 80],
-        outputRange: [-80, 0],
+        inputRange: [0, 95],
+        outputRange: [-95, 0],
         extrapolate: 'clamp',
       });
 
       return (
         <Animated.View style={[styles.leftSwipeActionsContainer, { transform: [{ translateX: trans }] }]}>
           <TouchableOpacity
-            style={[styles.swipeActionBtn, styles.callSwipeBtn]}
+            style={[
+              styles.swipeActionBtn,
+              hasActiveFollowup ? styles.followupSwipeBtn : styles.newFollowupSwipeBtn,
+            ]}
             onPress={() => {
               swipeableRef.current?.close();
-              onCall(item.Phonenumber);
+              onSwipeFollowupPress(item, hasActiveFollowup);
             }}
             activeOpacity={0.8}
           >
-            <Ionicons name="call" size={20} color="#FFFFFF" />
-            <Text style={styles.swipeActionText}>Call</Text>
+            <Ionicons
+              name={hasActiveFollowup ? 'notifications' : 'notifications-outline'}
+              size={20}
+              color="#FFFFFF"
+            />
+            <Text style={styles.swipeActionText}>
+              {hasActiveFollowup ? 'Follow-up' : 'New Reminder'}
+            </Text>
           </TouchableOpacity>
         </Animated.View>
       );
@@ -315,6 +330,17 @@ const ContactCard = React.memo(
 
               {!isSelectionMode && (
                 <View style={styles.actionButtons}>
+                  {hasActiveFollowup && (
+                    <TouchableOpacity
+                      style={[styles.iconButton, styles.followupBellButton]}
+                      onPress={() => onFollowupBellPress(item)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="notifications" size={17} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  )}
+
                   <TouchableOpacity
                     style={[styles.iconButton, styles.whatsappButton]}
                     onPress={() => onWhatsApp(item.Phonenumber)}
@@ -428,11 +454,11 @@ const ContactCard = React.memo(
 export default function ContactsScreen({ navigation, route }: any) {
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [pinnedTags, setPinnedTags] = useState<string[]>([]);
+  const [activeFollowups, setActiveFollowups] = useState<FollowupItem[]>([]);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [isStarredFilterActive, setIsStarredFilterActive] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Declared at the top level of ContactsScreen so it is globally available
   const activeTerms = useMemo(() => {
     const q = (searchQuery || '').trim().toLowerCase();
     if (!q) return [];
@@ -520,7 +546,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     return () => sub.remove();
   }, [isSelectionMode, isTagModalVisible, isRemoveTagModalVisible, quickContactModalVisible]);
 
-  // Synchronize when navigating from RecentActivity or PopTags
   useEffect(() => {
     if (route.params?.selectedTag !== undefined) {
       const chosenTag = route.params.selectedTag ? route.params.selectedTag.trim() : '';
@@ -589,6 +614,30 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, [userPhone]);
 
+  const fetchFollowupsData = useCallback(async (phoneOverride?: string) => {
+    try {
+      const activePhone = phoneOverride || (await AsyncStorage.getItem('user_phone')) || userPhone;
+      const { data, error } = await supabase
+        .from('Followups_Table')
+        .select('*')
+        .eq('Userphonenumber', activePhone)
+        .eq('is_completed', false);
+
+      if (error) throw error;
+      setActiveFollowups(data || []);
+    } catch (err: any) {
+      console.warn('Failed to load active followups:', err.message);
+    }
+  }, [userPhone]);
+
+  const activeFollowupContactIdSet = useMemo(() => {
+    const set = new Set<number>();
+    activeFollowups.forEach((f) => {
+      if (f.contact_id) set.add(f.contact_id);
+    });
+    return set;
+  }, [activeFollowups]);
+
   const contactsMap = useMemo(() => {
     const map = new Map<string, Contact>();
     for (const c of allContacts) {
@@ -639,7 +688,11 @@ export default function ContactsScreen({ navigation, route }: any) {
 
         if (isMounted) {
           if (allContacts.length === 0) setLoading(true);
-          await Promise.all([fetchPinnedTags(active), fetchContactsData(active)]);
+          await Promise.all([
+            fetchPinnedTags(active),
+            fetchContactsData(active),
+            fetchFollowupsData(active),
+          ]);
           if (isMounted) setLoading(false);
         }
       };
@@ -647,7 +700,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       return () => {
         isMounted = false;
       };
-    }, [userPhone, fetchPinnedTags, fetchContactsData, allContacts.length])
+    }, [userPhone, fetchPinnedTags, fetchContactsData, fetchFollowupsData, allContacts.length])
   );
 
   const handlePullRefresh = useCallback(async () => {
@@ -667,9 +720,24 @@ export default function ContactsScreen({ navigation, route }: any) {
 
     const storedPhone = await AsyncStorage.getItem('user_phone');
     const active = storedPhone || userPhone;
-    await Promise.all([fetchPinnedTags(active), fetchContactsData(active)]);
+    await Promise.all([
+      fetchPinnedTags(active),
+      fetchContactsData(active),
+      fetchFollowupsData(active),
+    ]);
     setRefreshing(false);
-  }, [userPhone, isSelectionMode, searchQuery, selectedTag, isStarredFilterActive, fetchPinnedTags, fetchContactsData, closeActiveSwipeable, saveSearchState]);
+  }, [
+    userPhone,
+    isSelectionMode,
+    searchQuery,
+    selectedTag,
+    isStarredFilterActive,
+    fetchPinnedTags,
+    fetchContactsData,
+    fetchFollowupsData,
+    closeActiveSwipeable,
+    saveSearchState,
+  ]);
 
   const handleResetAndRefresh = useCallback(async () => {
     closeActiveSwipeable();
@@ -696,9 +764,13 @@ export default function ContactsScreen({ navigation, route }: any) {
     const storedPhone = await AsyncStorage.getItem('user_phone');
     const active = storedPhone || userPhone;
     setLoading(true);
-    await Promise.all([fetchPinnedTags(active), fetchContactsData(active)]);
+    await Promise.all([
+      fetchPinnedTags(active),
+      fetchContactsData(active),
+      fetchFollowupsData(active),
+    ]);
     setLoading(false);
-  }, [userPhone, fetchPinnedTags, fetchContactsData, closeActiveSwipeable, saveSearchState]);
+  }, [userPhone, fetchPinnedTags, fetchContactsData, fetchFollowupsData, closeActiveSwipeable, saveSearchState]);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('tabPress', () => {
@@ -1640,7 +1712,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     [showToast]
   );
 
-  // Single Press: Immediately searches and filters by that person's name
   const handleLinkedBadgeSinglePress = useCallback((targetContact: Contact) => {
     closeActiveSwipeable();
     const targetName = targetContact.Name ? targetContact.Name.trim() : '';
@@ -1665,54 +1736,86 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, [closeActiveSwipeable, saveSearchState]);
 
-  // Long Press: Opens the quick-overview popup modal
   const handleLinkedBadgeLongPress = useCallback((targetContact: Contact) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setQuickContactTarget(targetContact);
     setQuickContactModalVisible(true);
   }, []);
 
+  const handleFollowupBellPress = useCallback((contact: Contact) => {
+    closeActiveSwipeable();
+    Haptics.selectionAsync().catch(() => {});
+    navigation.navigate('Followups', {
+      userPhone,
+      filterContactId: contact.id,
+    });
+  }, [closeActiveSwipeable, navigation, userPhone]);
+
+  const handleSwipeFollowupPress = useCallback((contact: Contact, hasActive: boolean) => {
+    Haptics.selectionAsync().catch(() => {});
+    if (hasActive) {
+      navigation.navigate('Followups', {
+        userPhone,
+        filterContactId: contact.id,
+      });
+    } else {
+      navigation.navigate('Followups', {
+        userPhone,
+        openCreate: true,
+        preselectedContact: contact,
+      });
+    }
+  }, [navigation, userPhone]);
+
   const renderContactCard = useCallback(
-    ({ item }: { item: Contact }) => (
-      <ContactCard
-        item={item}
-        isSelectionMode={isSelectionMode}
-        isSelected={selectedContactIds.has(item.id)}
-        searchQuery={searchQuery}
-        activeTerms={activeTerms}
-        contactsMap={contactsMap}
-        onPress={() => {
-          if (isSelectionMode) {
-            handleToggleSelectCard(item.id);
-          } else {
-            closeActiveSwipeable();
-            navigation.navigate('EditContact', { id: item.id, userPhone });
-          }
-        }}
-        onLongPress={() => {
-          if (!isSelectionMode) {
-            handleEnterSelectionMode(item.id);
-          }
-        }}
-        onCall={handleCall}
-        onWhatsApp={handleWhatsApp}
-        onDelete={handleDeleteContact}
-        onTagPress={handleTagPress}
-        onCopyPhone={handleCopyPhone}
-        onToggleStar={handleToggleStar}
-        onLinkedBadgePress={handleLinkedBadgeSinglePress}
-        onLinkedBadgeLongPress={handleLinkedBadgeLongPress}
-        onSwipeOpen={(ref) => {
-          if (openSwipeableRef.current && openSwipeableRef.current !== ref) {
-            openSwipeableRef.current.close();
-          }
-          openSwipeableRef.current = ref;
-        }}
-      />
-    ),
+    ({ item }: { item: Contact }) => {
+      const hasActive = activeFollowupContactIdSet.has(item.id);
+
+      return (
+        <ContactCard
+          item={item}
+          isSelectionMode={isSelectionMode}
+          isSelected={selectedContactIds.has(item.id)}
+          hasActiveFollowup={hasActive}
+          searchQuery={searchQuery}
+          activeTerms={activeTerms}
+          contactsMap={contactsMap}
+          onPress={() => {
+            if (isSelectionMode) {
+              handleToggleSelectCard(item.id);
+            } else {
+              closeActiveSwipeable();
+              navigation.navigate('EditContact', { id: item.id, userPhone });
+            }
+          }}
+          onLongPress={() => {
+            if (!isSelectionMode) {
+              handleEnterSelectionMode(item.id);
+            }
+          }}
+          onCall={handleCall}
+          onWhatsApp={handleWhatsApp}
+          onDelete={handleDeleteContact}
+          onTagPress={handleTagPress}
+          onCopyPhone={handleCopyPhone}
+          onToggleStar={handleToggleStar}
+          onFollowupBellPress={handleFollowupBellPress}
+          onSwipeFollowupPress={handleSwipeFollowupPress}
+          onLinkedBadgePress={handleLinkedBadgeSinglePress}
+          onLinkedBadgeLongPress={handleLinkedBadgeLongPress}
+          onSwipeOpen={(ref) => {
+            if (openSwipeableRef.current && openSwipeableRef.current !== ref) {
+              openSwipeableRef.current.close();
+            }
+            openSwipeableRef.current = ref;
+          }}
+        />
+      );
+    },
     [
       isSelectionMode,
       selectedContactIds,
+      activeFollowupContactIdSet,
       searchQuery,
       activeTerms,
       contactsMap,
@@ -1726,6 +1829,8 @@ export default function ContactsScreen({ navigation, route }: any) {
       handleTagPress,
       handleCopyPhone,
       handleToggleStar,
+      handleFollowupBellPress,
+      handleSwipeFollowupPress,
       handleLinkedBadgeSinglePress,
       handleLinkedBadgeLongPress,
       closeActiveSwipeable,
@@ -1827,45 +1932,65 @@ export default function ContactsScreen({ navigation, route }: any) {
               </View>
             </TouchableOpacity>
 
-            {totalStarredCount > 0 && (
-              <TouchableOpacity
+            {/* Permanent Default Starred Tag Badge */}
+            <TouchableOpacity
+              style={[
+                styles.tagBadge,
+                styles.starredTagBadge,
+                isStarredFilterActive && styles.starredTagBadgeActive,
+              ]}
+              onPress={handleToggleStarredTag}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="star" size={12} color={isStarredFilterActive ? '#FFFFFF' : '#D97706'} />
+              <Text
                 style={[
-                  styles.tagBadge,
-                  styles.starredTagBadge,
-                  isStarredFilterActive && styles.starredTagBadgeActive,
+                  styles.tagBadgeText,
+                  styles.starredTagText,
+                  isStarredFilterActive && styles.tagBadgeTextActive,
                 ]}
-                onPress={handleToggleStarredTag}
-                activeOpacity={0.75}
               >
-                <Ionicons name="star" size={12} color={isStarredFilterActive ? '#FFFFFF' : '#D97706'} />
+                Starred
+              </Text>
+              <View
+                style={[
+                  styles.countBubble,
+                  styles.starredCountBubble,
+                  isStarredFilterActive && styles.starredCountBubbleActive,
+                ]}
+              >
                 <Text
                   style={[
-                    styles.tagBadgeText,
-                    styles.starredTagText,
-                    isStarredFilterActive && styles.tagBadgeTextActive,
+                    styles.badgeCount,
+                    styles.starredBadgeCount,
+                    isStarredFilterActive && styles.badgeCountActive,
                   ]}
                 >
-                  Starred
+                  {totalStarredCount}
                 </Text>
-                <View
-                  style={[
-                    styles.countBubble,
-                    styles.starredCountBubble,
-                    isStarredFilterActive && styles.starredCountBubbleActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.badgeCount,
-                      styles.starredBadgeCount,
-                      isStarredFilterActive && styles.badgeCountActive,
-                    ]}
-                  >
-                    {totalStarredCount}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            )}
+              </View>
+            </TouchableOpacity>
+
+            {/* Permanent Default Follow-ups Tag Badge */}
+            <TouchableOpacity
+              style={[styles.tagBadge, styles.followupsTagBadge]}
+              onPress={() => {
+                closeActiveSwipeable();
+                Haptics.selectionAsync().catch(() => {});
+                navigation.navigate('Followups', { userPhone });
+              }}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="notifications" size={12} color="#059669" />
+              <Text style={[styles.tagBadgeText, styles.followupsTagText]}>
+                Follow-ups
+              </Text>
+              <View style={[styles.countBubble, styles.followupsCountBubble]}>
+                <Text style={[styles.badgeCount, styles.followupsBadgeCount]}>
+                  {activeFollowups.length}
+                </Text>
+              </View>
+            </TouchableOpacity>
 
             {pinnedTags.map((tag, idx) => {
               const isActive = selectedTag === tag;
@@ -1904,6 +2029,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     selectedTag,
     isStarredFilterActive,
     totalStarredCount,
+    activeFollowups.length,
     pinnedTags,
     linkedPeopleMap,
     suggestions,
@@ -1916,6 +2042,8 @@ export default function ContactsScreen({ navigation, route }: any) {
     handleToggleStarredTag,
     handleSelectSuggestion,
     closeActiveSwipeable,
+    navigation,
+    userPhone,
     saveSearchState,
   ]);
 
@@ -2024,7 +2152,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         ) : (
           <TouchableOpacity
             style={[styles.emptyActionButton, styles.emptyActionPrimary]}
-            onPress={() => navigation.navigate('AddContact', { userPhone })}
+            onPress={() => navigation.navigate('Home')}
             activeOpacity={0.8}
           >
             <Ionicons name="person-add" size={16} color="#FFFFFF" />
@@ -2033,7 +2161,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         )}
       </View>
     );
-  }, [loading, searchQuery, selectedTag, isStarredFilterActive, handleClearSearch, navigation, userPhone]);
+  }, [loading, searchQuery, selectedTag, isStarredFilterActive, handleClearSearch, navigation]);
 
   const quickTargetLinkedContacts = useMemo(() => {
     if (!quickContactTarget) return [];
@@ -2156,7 +2284,6 @@ export default function ContactsScreen({ navigation, route }: any) {
           style={styles.modalOverlay}
           onPress={() => setQuickContactModalVisible(false)}
         >
-          {/* Prevent taps inside the card from closing the modal */}
           <Pressable style={styles.quickModalCard} onPress={(e) => e.stopPropagation()}>
             <View style={styles.quickModalHeader}>
               <View style={styles.quickAvatar}>
@@ -2720,6 +2847,20 @@ const styles = StyleSheet.create({
   starredTagText: {
     color: '#92400E',
   },
+  followupsTagBadge: {
+    borderColor: '#A7F3D0',
+    backgroundColor: '#ECFDF5',
+  },
+  followupsTagText: {
+    color: '#065F46',
+    fontWeight: '700',
+  },
+  followupsCountBubble: {
+    backgroundColor: '#D1FAE5',
+  },
+  followupsBadgeCount: {
+    color: '#047857',
+  },
   countBubble: {
     backgroundColor: '#E2E8F0',
     borderRadius: 8,
@@ -2838,7 +2979,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   leftSwipeActionsContainer: {
-    width: 80,
+    width: 95,
     flexDirection: 'row',
   },
   swipeActionBtn: {
@@ -2850,13 +2991,17 @@ const styles = StyleSheet.create({
   deleteSwipeBtn: {
     backgroundColor: '#EF4444',
   },
-  callSwipeBtn: {
+  followupSwipeBtn: {
+    backgroundColor: '#D97706',
+  },
+  newFollowupSwipeBtn: {
     backgroundColor: '#2563EB',
   },
   swipeActionText: {
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
+    textAlign: 'center',
   },
   cardHeaderRow: {
     flexDirection: 'row',
@@ -2921,6 +3066,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  followupBellButton: {
+    backgroundColor: '#F59E0B',
   },
   whatsappButton: {
     backgroundColor: '#25D366',
