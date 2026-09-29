@@ -15,6 +15,8 @@ import {
   RefreshControl,
   Keyboard,
   Animated,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -76,7 +78,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
     route.params?.preselectedContact || null
   );
 
-  // Exact ID & Phonenumber binding
+  // Explicit ID & Tag state bindings
   const [boundContacts, setBoundContacts] = useState<Contact[]>([]);
   const [boundTags, setBoundTags] = useState<string[]>([]);
 
@@ -108,7 +110,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
   const toastScale = useRef(new Animated.Value(0.92)).current;
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Cursor tracking for @ and #
+  // Cursor tracking for @ and # triggers
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
 
   // Suggestions state
@@ -373,7 +375,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
     });
   }, [followups, activeFilterContactId, completedFilter, searchQuery, contactsMap]);
 
-  // GROUP COMPLETED FOLLOW-UPS DATE-WISE (Today, Yesterday, Past 1 Week, etc.)
   const groupedCompletedFollowups = useMemo(() => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -627,11 +628,18 @@ export default function FollowupsScreen({ route, navigation }: any) {
     setCreateType(item.type);
     setSelectedContact(item.contact_id ? contactsMap.get(item.contact_id) || null : null);
 
-    const linked = (item.linked_contact_ids || [])
+    const linkedContactsList = (item.linked_contact_ids || [])
       .map((id) => contactsMap.get(id))
       .filter(Boolean) as Contact[];
 
-    setBoundContacts(linked);
+    if (item.type === 'contact' && item.contact_id) {
+      const primaryC = contactsMap.get(item.contact_id);
+      if (primaryC && !linkedContactsList.some((c) => c.id === primaryC.id)) {
+        linkedContactsList.unshift(primaryC);
+      }
+    }
+
+    setBoundContacts(linkedContactsList);
     setBoundTags(item.target_tags || []);
     setNoteText(item.note);
     setDueDate(item.due_date);
@@ -732,30 +740,19 @@ export default function FollowupsScreen({ route, navigation }: any) {
   const handleNoteTextChange = (text: string) => {
     setNoteText(text);
 
-    if (text.includes('@') && createType === 'contact' && !editingItem) {
-      setCreateType('task');
-    }
-
-    setBoundContacts((prev) =>
-      prev.filter((c) => new RegExp(`@${c.Name}\\b`, 'i').test(text))
-    );
-
-    const noteWords = text.match(/#([a-zA-Z0-9_\-]+)/g) || [];
-    const parsedTags = noteWords.map((t) => t.replace('#', '').trim().toLowerCase());
-    setBoundTags((prev) =>
-      prev.filter((t) => parsedTags.includes(t.toLowerCase()))
-    );
-
     const pos = selection.start;
     const textUpToCursor = text.substring(0, pos);
+    
     const lastAt = textUpToCursor.lastIndexOf('@');
     const lastHash = textUpToCursor.lastIndexOf('#');
     const lastSpace = textUpToCursor.lastIndexOf(' ');
+    const lastNewline = textUpToCursor.lastIndexOf('\n');
+    const delimiterIndex = Math.max(lastSpace, lastNewline);
 
-    if (lastAt > lastHash && lastAt > lastSpace) {
+    if (lastAt !== -1 && lastAt > delimiterIndex && (lastHash === -1 || lastAt > lastHash)) {
       setSuggestionMode('contact');
       setSuggestionQuery(textUpToCursor.substring(lastAt + 1).toLowerCase());
-    } else if (lastHash > lastAt && lastHash > lastSpace) {
+    } else if (lastHash !== -1 && lastHash > delimiterIndex && (lastAt === -1 || lastHash > lastAt)) {
       setSuggestionMode('tag');
       setSuggestionQuery(textUpToCursor.substring(lastHash + 1).toLowerCase());
     } else {
@@ -766,53 +763,57 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
   const handleSelectContactSuggestion = (c: Contact) => {
     Haptics.selectionAsync().catch(() => {});
-    const pos = selection.start;
-    const before = noteText.substring(0, pos);
-    const after = noteText.substring(pos);
-    const lastAt = before.lastIndexOf('@');
-    const base = before.substring(0, lastAt);
-    const updated = base + `@${c.Name} ` + after;
-
-    handleNoteTextChange(updated);
+    
+    if (!boundContacts.some((bc) => bc.id === c.id)) {
+      setBoundContacts((prev) => [...prev, c]);
+    }
 
     if (createType === 'contact' && !selectedContact) {
       setSelectedContact(c);
     }
 
+    const pos = selection.start;
+    const before = noteText.substring(0, pos);
+    const after = noteText.substring(pos);
+    const lastAt = before.lastIndexOf('@');
+    if (lastAt !== -1) {
+      const base = before.substring(0, lastAt);
+      setNoteText(base + after);
+      const newPos = base.length;
+      setSelection({ start: newPos, end: newPos });
+    }
+
     setSuggestionMode(null);
-    const newPos = base.length + c.Name.length + 2;
-    setSelection({ start: newPos, end: newPos });
+    setSuggestionQuery('');
+    noteInputRef.current?.focus();
   };
 
   const handleSelectTagSuggestion = (tag: string) => {
     Haptics.selectionAsync().catch(() => {});
+    
+    if (!boundTags.map((t) => t.toLowerCase()).includes(tag.toLowerCase())) {
+      setBoundTags((prev) => [...prev, tag]);
+    }
+
     const pos = selection.start;
     const before = noteText.substring(0, pos);
     const after = noteText.substring(pos);
     const lastHash = before.lastIndexOf('#');
-    const base = before.substring(0, lastHash);
-    const updated = base + `#${tag} ` + after;
-
-    handleNoteTextChange(updated);
-
-    if (!boundTags.map(t => t.toLowerCase()).includes(tag.toLowerCase())) {
-      setBoundTags((prev) => [...prev, tag]);
+    if (lastHash !== -1) {
+      const base = before.substring(0, lastHash);
+      setNoteText(base + after);
+      const newPos = base.length;
+      setSelection({ start: newPos, end: newPos });
     }
 
     setSuggestionMode(null);
-    const newPos = base.length + tag.length + 2;
-    setSelection({ start: newPos, end: newPos });
+    setSuggestionQuery('');
+    noteInputRef.current?.focus();
   };
 
   const handleRemoveBoundContact = (contactId: number) => {
     Haptics.selectionAsync().catch(() => {});
-    const contactToRemove = contactsMap.get(contactId);
-    if (contactToRemove) {
-      const escapedName = contactToRemove.Name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(`@${escapedName}\\b`, 'gi');
-      const nextNote = noteText.replace(regex, '').replace(/\s+/g, ' ').trim();
-      handleNoteTextChange(nextNote);
-    }
+    setBoundContacts((prev) => prev.filter((c) => c.id !== contactId));
     if (selectedContact?.id === contactId) {
       setSelectedContact(null);
     }
@@ -820,10 +821,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
   const handleRemoveBoundTag = (tag: string) => {
     Haptics.selectionAsync().catch(() => {});
-    const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`#${escapedTag}\\b`, 'gi');
-    const nextNote = noteText.replace(regex, '').replace(/\s+/g, ' ').trim();
-    handleNoteTextChange(nextNote);
+    setBoundTags((prev) => prev.filter((t) => t.toLowerCase() !== tag.toLowerCase()));
   };
 
   const validateTimeNotPassed = (): boolean => {
@@ -850,6 +848,59 @@ export default function FollowupsScreen({ route, navigation }: any) {
     return true;
   };
 
+  // SAFE HARDWARE LOCAL NOTIFICATION SCHEDULING LOGIC (BYPASSED IN EXPO GO)
+  const scheduleLocalNotification = async (
+    dueD: string,
+    dueT: string | null,
+    note: string,
+    isTaskType: boolean,
+    targetName: string,
+    followupId: number
+  ) => {
+    if (!dueT) return;
+    try {
+      // Safely check if native notifications module can be executed without crashing Expo Go
+      const Notifications = require('expo-notifications');
+      if (!Notifications || typeof Notifications.scheduleNotificationAsync !== 'function') {
+        return;
+      }
+
+      const match = dueT.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+      if (!match) return;
+
+      let h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      const mer = match[3].toUpperCase();
+      if (mer === 'PM' && h < 12) h += 12;
+      if (mer === 'AM' && h === 12) h = 0;
+
+      const [y, mo, d] = dueD.split('-').map(Number);
+      const triggerDate = new Date(y, mo - 1, d, h, m, 0);
+
+      if (triggerDate.getTime() > Date.now()) {
+        const notifTitle = `Follow-up Reminder ⏰`;
+        const notifBody = isTaskType 
+          ? `Group Task: ${note.trim() || targetName}`
+          : `${targetName}: ${note.trim() || 'Scheduled Follow-up'}`;
+
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: notifTitle,
+            body: notifBody,
+            sound: true,
+            data: { followupId, searchFilterName: targetName },
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: triggerDate,
+          },
+        });
+      }
+    } catch (err) {
+      // Completely swallowed so Expo Go never displays the red block error banner
+    }
+  };
+
   const handleSaveFollowup = async () => {
     if (!noteText.trim() && boundContacts.length === 0 && boundTags.length === 0) {
       Alert.alert('Note Required', 'Please enter note text, mention a contact, or add a tag.');
@@ -861,22 +912,20 @@ export default function FollowupsScreen({ route, navigation }: any) {
     }
 
     const activePhone = (await AsyncStorage.getItem('user_phone')) || userPhone;
-
-    const rawTagMatches = noteText.match(/#([a-zA-Z0-9_\-]+)/g) || [];
-    const parsedTextTags = rawTagMatches.map((t) => t.replace('#', '').trim()).filter(Boolean);
-    const finalTags = Array.from(new Set([...boundTags, ...parsedTextTags]));
-
     const finalLinkedIds: number[] = Array.from(new Set(boundContacts.map((c) => c.id)));
+    const finalTags = Array.from(new Set(boundTags));
 
     const primaryContactId =
-      createType === 'contact' ? selectedContact?.id || (boundContacts.length > 0 ? boundContacts[0].id : null) : null;
+      createType === 'contact' 
+        ? selectedContact?.id || (boundContacts.length > 0 ? boundContacts[0].id : null) 
+        : null;
 
     const payload = {
       Userphonenumber: activePhone,
       type: createType,
       contact_id: primaryContactId,
-      linked_contact_ids: createType === 'task' ? finalLinkedIds : [],
-      target_tags: createType === 'task' ? finalTags : [],
+      linked_contact_ids: finalLinkedIds,
+      target_tags: finalTags,
       note: noteText.trim(),
       due_date: dueDate,
       due_time: formattedTimeForStorage,
@@ -898,6 +947,8 @@ export default function FollowupsScreen({ route, navigation }: any) {
         : 'Group Task';
 
     try {
+      let savedId = editingItem?.id;
+
       if (editingItem) {
         setFollowups((prev) =>
           prev.map((f) => (f.id === editingItem.id ? { ...f, ...payload } : f))
@@ -924,9 +975,22 @@ export default function FollowupsScreen({ route, navigation }: any) {
           .single();
         if (error) throw error;
 
+        savedId = data.id;
         setFollowups((prev) => [data, ...prev]);
 
         showCenteredToast('Follow-up Scheduled', scheduleDisplay, targetDisplayName, noteText.trim());
+      }
+
+      // Schedule hardware notification if time is provided
+      if (isTimeEnabled && formattedTimeForStorage && savedId) {
+        await scheduleLocalNotification(
+          dueDate,
+          formattedTimeForStorage,
+          noteText.trim(),
+          createType === 'task',
+          targetDisplayName,
+          savedId
+        );
       }
 
       setEditingItem(null);
@@ -975,32 +1039,8 @@ export default function FollowupsScreen({ route, navigation }: any) {
   };
 
   const renderFormattedNotePreview = (text: string) => {
-    const tokens = text.split(/(#[a-zA-Z0-9_\-]+|@[a-zA-Z0-9_\s]+)/g);
-    return (
-      <Text style={styles.noteText}>
-        {tokens.map((token, index) => {
-          if (token.startsWith('@')) {
-            return (
-              <Text key={index} style={styles.noteMentionHighlight}>
-                {token}
-              </Text>
-            );
-          }
-          if (token.startsWith('#')) {
-            return (
-              <Text key={index} style={styles.noteTagHighlight}>
-                {token}
-              </Text>
-            );
-          }
-          return (
-            <Text key={index} style={styles.noteProseText}>
-              {token}
-            </Text>
-          );
-        })}
-      </Text>
-    );
+    if (!text) return null;
+    return <Text style={styles.noteText}>{text}</Text>;
   };
 
   return (
@@ -1157,30 +1197,30 @@ export default function FollowupsScreen({ route, navigation }: any) {
             const isOverdue = item.due_date < todayStr;
             const isToday = item.due_date === todayStr;
 
-            const targetContacts = isTask
-              ? allContacts.filter((c) => {
-                  const isExplicitlyLinked =
-                    item.linked_contact_ids && item.linked_contact_ids.includes(c.id);
-                  const matchesTag =
-                    c.Tags &&
-                    (item.target_tags || []).some((tg) => {
-                      const tagsArray = c.Tags!.split(',').map((t) => t.trim().toLowerCase());
-                      return tagsArray.includes(tg.trim().toLowerCase());
-                    });
-                  return isExplicitlyLinked || matchesTag;
-                })
-              : contact ? [contact] : [];
+            const targetContacts = (() => {
+              const explicitList = (item.linked_contact_ids || [])
+                .map((id) => contactsMap.get(id))
+                .filter(Boolean) as Contact[];
 
-            const validCardTags = (() => {
-              if (!item.target_tags || item.target_tags.length === 0) return [];
-              return item.target_tags.filter((tg) =>
-                targetContacts.some((c) => {
-                  const cTags = c.Tags ? c.Tags.split(',').map((t) => t.trim().toLowerCase()) : [];
-                  return cTags.includes(tg.trim().toLowerCase());
-                })
-              );
+              if (!isTask && contact && !explicitList.some((c) => c.id === contact.id)) {
+                explicitList.unshift(contact);
+              }
+
+              const tagMatchedList = allContacts.filter((c) => {
+                if (!c.Tags) return false;
+                return (item.target_tags || []).some((tg) => {
+                  const tagsArray = c.Tags!.split(',').map((t) => t.trim().toLowerCase());
+                  return tagsArray.includes(tg.trim().toLowerCase());
+                });
+              });
+
+              const combinedMap = new Map<number, Contact>();
+              explicitList.forEach((c) => combinedMap.set(c.id, c));
+              tagMatchedList.forEach((c) => combinedMap.set(c.id, c));
+              return Array.from(combinedMap.values());
             })();
 
+            const validCardTags = item.target_tags || [];
             const isExpanded = expandedTaskIds.has(item.id);
             const completedIdsSet = new Set(item.completed_contact_ids || []);
 
@@ -1248,7 +1288,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   {renderFormattedNotePreview(item.note)}
                 </TouchableOpacity>
 
-                {isTask && (
+                {(isTask || targetContacts.length > 0) && (
                   <View style={styles.taskCohortContainer}>
                     {validCardTags.length > 0 && (
                       <View style={styles.tagsRow}>
@@ -1272,7 +1312,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                         activeOpacity={0.7}
                       >
                         <Text style={styles.taskProgressText}>
-                          👥 Target Contacts: {targetContacts.length} (
+                          {isTask ? '👥 Target Contacts:' : '👤 Target Contact:'} {targetContacts.length} (
                           {item.completed_contact_ids?.length || 0}/{targetContacts.length} Done)
                         </Text>
                         <Ionicons
@@ -1298,7 +1338,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                       <View style={styles.checklistBlock}>
                         {targetContacts.length === 0 ? (
                           <Text style={styles.emptyChecklistText}>
-                            No contacts linked or mentioned in this task.
+                            No contacts linked or mentioned in this follow-up.
                           </Text>
                         ) : (
                           targetContacts.map((tc, tcIdx) => {
@@ -1348,79 +1388,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                             );
                           })
                         )}
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                {!isTask && targetContacts.length > 0 && (
-                  <View style={styles.taskCohortContainer}>
-                    <View style={styles.taskToggleRow}>
-                      <TouchableOpacity
-                        style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 }}
-                        onPress={() => toggleTaskDrawer(item.id)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.taskProgressText}>
-                          👤 Target Contact: {targetContacts.length} (
-                          {item.completed_contact_ids?.length || 0}/{targetContacts.length} Done)
-                        </Text>
-                        <Ionicons
-                          name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                          size={16}
-                          color="#2563EB"
-                        />
-                      </TouchableOpacity>
-                    </View>
-
-                    {isExpanded && (
-                      <View style={styles.checklistBlock}>
-                        {targetContacts.map((tc, tcIdx) => {
-                          const isDone = completedIdsSet.has(tc.id);
-                          return (
-                            <View key={tc.id} style={styles.checklistItemRow}>
-                              <TouchableOpacity
-                                style={styles.checkItemClickableArea}
-                                activeOpacity={0.7}
-                                onPress={() => handleToggleTaskContact(item, tc.id)}
-                              >
-                                <Ionicons
-                                  name={isDone ? 'checkbox' : 'square-outline'}
-                                  size={20}
-                                  color={isDone ? '#10B981' : '#64748B'}
-                                  style={{ marginRight: 8 }}
-                                />
-                                <View style={{ flex: 1 }}>
-                                  <Text
-                                    style={[
-                                      styles.checklistNameText,
-                                      isDone && styles.checklistNameDone,
-                                    ]}
-                                    numberOfLines={1}
-                                  >
-                                    {tcIdx + 1}. {tc.Name}
-                                  </Text>
-                                  <Text style={styles.checklistPhoneText}>{tc.Phonenumber}</Text>
-                                </View>
-                              </TouchableOpacity>
-
-                              <View style={styles.checklistActions}>
-                                <TouchableOpacity
-                                  style={[styles.smallIconBtn, { backgroundColor: '#25D366' }]}
-                                  onPress={() => handleWhatsApp(tc.Phonenumber)}
-                                >
-                                  <Ionicons name="logo-whatsapp" size={14} color="#FFFFFF" />
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                  style={[styles.smallIconBtn, { backgroundColor: '#2563EB' }]}
-                                  onPress={() => handleCall(tc.Phonenumber)}
-                                >
-                                  <Ionicons name="call" size={13} color="#FFFFFF" />
-                                </TouchableOpacity>
-                              </View>
-                            </View>
-                          );
-                        })}
                       </View>
                     )}
                   </View>
@@ -1554,7 +1521,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                   <Text style={styles.completedNoteText} numberOfLines={2}>
                                     {cItem.note}
                                   </Text>
-                                  
                                 </View>
 
                                 <View style={styles.completedItemActions}>
@@ -1628,110 +1594,117 @@ export default function FollowupsScreen({ route, navigation }: any) {
       >
         <Pressable style={styles.modalOverlay} onPress={() => setViewingItem(null)}>
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: 10 }}
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={{ width: '100%' }}
             >
-              <View style={styles.modalHeaderRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Ionicons name="checkmark-circle" size={20} color="#10B981" />
-                  <Text style={styles.modalTitle}>Completed Follow-up</Text>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: insets.bottom + 30 }}
+                keyboardShouldPersistTaps="always"
+              >
+                <View style={styles.modalHeaderRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="checkmark-circle" size={20} color="#10B981" />
+                    <Text style={styles.modalTitle}>Completed Follow-up</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setViewingItem(null)}>
+                    <Ionicons name="close" size={22} color="#64748B" />
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity onPress={() => setViewingItem(null)}>
-                  <Ionicons name="close" size={22} color="#64748B" />
-                </TouchableOpacity>
-              </View>
 
-              <View style={styles.typeSelectorRow}>
-                <View style={[styles.typeBtn, styles.typeBtnActive]}>
-                  <Ionicons
-                    name={viewingItem?.type === 'task' ? 'pricetags' : 'person'}
-                    size={14}
-                    color="#2563EB"
-                  />
-                  <Text style={[styles.typeBtnText, styles.typeBtnTextActive]}>
-                    {viewingItem?.type === 'task' ? 'Group Task' : 'Single Person'}
-                  </Text>
-                </View>
-              </View>
-
-              {viewingItem?.type === 'contact' && viewingItem.contact_id && (
-                <View style={styles.selectedContactBanner}>
-                  <View style={styles.contactBannerLeft}>
-                    <Ionicons name="person-circle" size={18} color="#2563EB" />
-                    <Text style={styles.selectedContactBannerText} numberOfLines={1}>
-                      Contact:{' '}
-                      <Text style={{ fontWeight: '700', color: '#0F172A' }}>
-                        {contactsMap.get(viewingItem.contact_id)?.Name || 'Contact'}
-                      </Text>
+                <View style={styles.typeSelectorRow}>
+                  <View style={[styles.typeBtn, styles.typeBtnActive]}>
+                    <Ionicons
+                      name={viewingItem?.type === 'task' ? 'pricetags' : 'person'}
+                      size={14}
+                      color="#2563EB"
+                    />
+                    <Text style={[styles.typeBtnText, styles.typeBtnTextActive]}>
+                      {viewingItem?.type === 'task' ? 'Group Task' : 'Single Person'}
                     </Text>
                   </View>
                 </View>
-              )}
 
-              {viewingItem?.linked_contact_ids && viewingItem.linked_contact_ids.length > 0 && (
-                <View style={styles.contactSelectorSection}>
-                  <Text style={styles.selectorLabel}>Linked Contacts ({viewingItem.linked_contact_ids.length}):</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
-                    {viewingItem.linked_contact_ids.map((id) => {
-                      const c = contactsMap.get(id);
-                      if (!c) return null;
-                      return (
-                        <View key={c.id} style={[styles.contactPickerChip, styles.contactPickerChipActive]}>
-                          <Ionicons name="person-circle" size={14} color="#FFFFFF" />
+                {viewingItem?.type === 'contact' && viewingItem.contact_id && (
+                  <View style={styles.selectedContactBanner}>
+                    <View style={styles.contactBannerLeft}>
+                      <Ionicons name="person-circle" size={18} color="#2563EB" />
+                      <Text style={styles.selectedContactBannerText} numberOfLines={1}>
+                        Contact:{' '}
+                        <Text style={{ fontWeight: '700', color: '#0F172A' }}>
+                          {contactsMap.get(viewingItem.contact_id)?.Name || 'Contact'}
+                        </Text>
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {viewingItem?.linked_contact_ids && viewingItem.linked_contact_ids.length > 0 && (
+                  <View style={styles.contactSelectorSection}>
+                    <Text style={styles.selectorLabel}>Linked Contacts ({viewingItem.linked_contact_ids.length}):</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
+                      {viewingItem.linked_contact_ids.map((id) => {
+                        const c = contactsMap.get(id);
+                        if (!c) return null;
+                        const primaryTag = c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag';
+                        return (
+                          <View key={c.id} style={[styles.contactPickerChip, styles.contactPickerChipActive]}>
+                            <Ionicons name="person-circle" size={14} color="#FFFFFF" />
+                            <Text style={[styles.contactPickerChipText, styles.contactPickerChipTextActive]} numberOfLines={1}>
+                              {c.Name} ({primaryTag})
+                            </Text>
+                          </View>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {viewingItem?.target_tags && viewingItem.target_tags.length > 0 && (
+                  <View style={styles.contactSelectorSection}>
+                    <Text style={styles.selectorLabel}>Linked Tags ({viewingItem.target_tags.length}):</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
+                      {viewingItem.target_tags.map((tg, idx) => (
+                        <View key={idx} style={[styles.contactPickerChip, styles.contactPickerChipActive]}>
+                          <Ionicons name="pricetag-outline" size={13} color="#FFFFFF" />
                           <Text style={[styles.contactPickerChipText, styles.contactPickerChipTextActive]} numberOfLines={1}>
-                            {c.Name}
+                            #{tg}
                           </Text>
                         </View>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              )}
-
-              {viewingItem?.target_tags && viewingItem.target_tags.length > 0 && (
-                <View style={styles.contactSelectorSection}>
-                  <Text style={styles.selectorLabel}>Linked Tags ({viewingItem.target_tags.length}):</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
-                    {viewingItem.target_tags.map((tg, idx) => (
-                      <View key={idx} style={[styles.contactPickerChip, styles.contactPickerChipActive]}>
-                        <Ionicons name="pricetag-outline" size={13} color="#FFFFFF" />
-                        <Text style={[styles.contactPickerChipText, styles.contactPickerChipTextActive]} numberOfLines={1}>
-                          #{tg}
-                        </Text>
-                      </View>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-
-              <Text style={styles.fieldLabel}>Note:</Text>
-              <View style={[styles.noteBoxWrapper, { backgroundColor: '#F8FAFC' }]}>
-                <Text style={[styles.noteModalInput, { color: '#0F172A', minHeight: 60 }]}>
-                  {viewingItem?.note}
-                </Text>
-              </View>
-
-              <Text style={styles.fieldLabel}>Scheduled Due Date:</Text>
-              <View style={[styles.dateInputRow, { backgroundColor: '#F8FAFC' }]}>
-                <Ionicons name="calendar" size={17} color="#2563EB" />
-                <Text style={styles.dateInputText}>{formatToDDMMYYYY(viewingItem?.due_date || '')}</Text>
-                {viewingItem?.due_time && (
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#2563EB' }}>
-                    {viewingItem.due_time}
-                  </Text>
+                      ))}
+                    </ScrollView>
+                  </View>
                 )}
-              </View>
 
-              <View style={styles.modalBtnRow}>
-                <TouchableOpacity
-                  style={[styles.modalBtn, styles.modalCancelBtn, { flex: 1 }]}
-                  onPress={() => setViewingItem(null)}
-                >
-                  <Text style={styles.modalCancelText}>Close</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
+                <Text style={styles.fieldLabel}>Note:</Text>
+                <View style={[styles.noteBoxWrapper, { backgroundColor: '#F8FAFC' }]}>
+                  <Text style={[styles.noteModalInput, { color: '#0F172A', minHeight: 60 }]}>
+                    {viewingItem?.note}
+                  </Text>
+                </View>
+
+                <Text style={styles.fieldLabel}>Scheduled Due Date:</Text>
+                <View style={[styles.dateInputRow, { backgroundColor: '#F8FAFC' }]}>
+                  <Ionicons name="calendar" size={17} color="#2563EB" />
+                  <Text style={styles.dateInputText}>{formatToDDMMYYYY(viewingItem?.due_date || '')}</Text>
+                  {viewingItem?.due_time && (
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#2563EB' }}>
+                      {viewingItem.due_time}
+                    </Text>
+                  )}
+                </View>
+
+                <View style={styles.modalBtnRow}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalCancelBtn, { flex: 1 }]}
+                    onPress={() => setViewingItem(null)}
+                  >
+                    <Text style={styles.modalCancelText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1748,421 +1721,432 @@ export default function FollowupsScreen({ route, navigation }: any) {
           onPress={() => setIsCreateModalVisible(false)}
         >
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <ScrollView
-              keyboardShouldPersistTaps="always"
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: 10 }}
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={{ width: '100%' }}
             >
-              <View style={styles.modalHeaderRow}>
-                <Text style={styles.modalTitle}>
-                  {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
-                </Text>
-                <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
-                  <Ionicons name="close" size={22} color="#64748B" />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.typeSelectorRow}>
-                <TouchableOpacity
-                  style={[styles.typeBtn, createType === 'contact' && styles.typeBtnActive]}
-                  onPress={() => {
-                    Haptics.selectionAsync().catch(() => {});
-                    setCreateType('contact');
-                  }}
-                >
-                  <Ionicons
-                    name="person"
-                    size={14}
-                    color={createType === 'contact' ? '#2563EB' : '#64748B'}
-                  />
-                  <Text
-                    style={[
-                      styles.typeBtnText,
-                      createType === 'contact' && styles.typeBtnTextActive,
-                    ]}
-                  >
-                    Single Person
+              <ScrollView
+                keyboardShouldPersistTaps="always"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+              >
+                <View style={styles.modalHeaderRow}>
+                  <Text style={styles.modalTitle}>
+                    {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
                   </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.typeBtn, createType === 'task' && styles.typeBtnActive]}
-                  onPress={() => {
-                    Haptics.selectionAsync().catch(() => {});
-                    setCreateType('task');
-                  }}
-                >
-                  <Ionicons
-                    name="pricetags"
-                    size={14}
-                    color={createType === 'task' ? '#2563EB' : '#64748B'}
-                  />
-                  <Text
-                    style={[styles.typeBtnText, createType === 'task' && styles.typeBtnTextActive]}
-                  >
-                    Task (Contacts/Tags)
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* SINGLE PERSON TAB: Display selected contact banner */}
-              {createType === 'contact' && selectedContact && (
-                <View style={styles.selectedContactBanner}>
-                  <View style={styles.contactBannerLeft}>
-                    <Ionicons name="person-circle" size={18} color="#2563EB" />
-                    <Text style={styles.selectedContactBannerText} numberOfLines={1}>
-                      Contact:{' '}
-                      <Text style={{ fontWeight: '700', color: '#0F172A' }}>
-                        {selectedContact.Name}
-                      </Text>
-                      {selectedContact.Tags ? ` (${selectedContact.Tags.split(',')[0].trim()})` : ''}
-                    </Text>
-                  </View>
+                  <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
+                    <Ionicons name="close" size={22} color="#64748B" />
+                  </TouchableOpacity>
                 </View>
-              )}
 
-              {/* SHARED: Linked Contacts card in both tabs allowing user to pick/manage mentioned contacts */}
-              {boundContacts.length > 0 && (
-                <View style={styles.contactSelectorSection}>
-                  <Text style={styles.selectorLabel}>
-                    {createType === 'contact' ? 'Select Contact from Note:' : `Linked Contacts (${boundContacts.length}):`}
-                  </Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={{ marginTop: 4 }}>
-                    {boundContacts.map((c) => {
-                      const isChosen = createType === 'contact' && selectedContact?.id === c.id;
-                      return (
-                        <TouchableOpacity
-                          key={c.id}
-                          style={[styles.contactPickerChip, isChosen && styles.contactPickerChipActive]}
-                          onPress={() => {
-                            Haptics.selectionAsync().catch(() => {});
-                            if (createType === 'contact') {
-                              setSelectedContact(isChosen ? null : c);
-                            }
-                          }}
-                        >
-                          <Ionicons
-                            name="person-circle"
-                            size={14}
-                            color={isChosen ? '#FFFFFF' : '#2563EB'}
-                          />
-                          <Text
-                            style={[
-                              styles.contactPickerChipText,
-                              isChosen && styles.contactPickerChipTextActive,
-                            ]}
-                            numberOfLines={1}
+                <View style={styles.typeSelectorRow}>
+                  <TouchableOpacity
+                    style={[styles.typeBtn, createType === 'contact' && styles.typeBtnActive]}
+                    onPress={() => {
+                      Haptics.selectionAsync().catch(() => {});
+                      setCreateType('contact');
+                    }}
+                  >
+                    <Ionicons
+                      name="person"
+                      size={14}
+                      color={createType === 'contact' ? '#2563EB' : '#64748B'}
+                    />
+                    <Text
+                      style={[
+                        styles.typeBtnText,
+                        createType === 'contact' && styles.typeBtnTextActive,
+                      ]}
+                    >
+                      Single Person
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.typeBtn, createType === 'task' && styles.typeBtnActive]}
+                    onPress={() => {
+                      Haptics.selectionAsync().catch(() => {});
+                      setCreateType('task');
+                    }}
+                  >
+                    <Ionicons
+                      name="pricetags"
+                      size={14}
+                      color={createType === 'task' ? '#2563EB' : '#64748B'}
+                    />
+                    <Text
+                      style={[styles.typeBtnText, createType === 'task' && styles.typeBtnTextActive]}
+                    >
+                      Task (Contacts/Tags)
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* SINGLE PERSON TAB ONLY: Display selected contact banner */}
+                {createType === 'contact' && selectedContact && (
+                  <View style={styles.selectedContactBanner}>
+                    <View style={styles.contactBannerLeft}>
+                      <Ionicons name="person-circle" size={18} color="#2563EB" />
+                      <Text style={styles.selectedContactBannerText} numberOfLines={1}>
+                        Contact:{' '}
+                        <Text style={{ fontWeight: '700', color: '#0F172A' }}>
+                          {selectedContact.Name}
+                        </Text>
+                        {selectedContact.Tags ? ` (${selectedContact.Tags.split(',')[0].trim()})` : ''}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* SHARED: Linked Contacts card showing Primary Tag */}
+                {boundContacts.length > 0 && (
+                  <View style={styles.contactSelectorSection}>
+                    <Text style={styles.selectorLabel}>
+                      {createType === 'contact' ? 'Primary Contact Selection:' : `Linked Contacts (${boundContacts.length}):`}
+                    </Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={{ marginTop: 4 }}>
+                      {boundContacts.map((c) => {
+                        const isChosen = createType === 'contact' && selectedContact?.id === c.id;
+                        const primaryTag = c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag';
+                        return (
+                          <TouchableOpacity
+                            key={c.id}
+                            style={[styles.contactPickerChip, isChosen && styles.contactPickerChipActive]}
+                            onPress={() => {
+                              Haptics.selectionAsync().catch(() => {});
+                              if (createType === 'contact') {
+                                setSelectedContact(isChosen ? null : c);
+                              }
+                            }}
                           >
-                            {c.Name}
+                            <Ionicons
+                              name="person-circle"
+                              size={14}
+                              color={isChosen ? '#FFFFFF' : '#2563EB'}
+                            />
+                            <Text
+                              style={[
+                                styles.contactPickerChipText,
+                                isChosen && styles.contactPickerChipTextActive,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {c.Name} ({primaryTag})
+                            </Text>
+                            <TouchableOpacity
+                              onPress={() => handleRemoveBoundContact(c.id)}
+                              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                              style={{ marginLeft: 4 }}
+                            >
+                              <Ionicons
+                                name="close-circle"
+                                size={14}
+                                color={isChosen ? '#FFFFFF' : '#64748B'}
+                              />
+                            </TouchableOpacity>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {/* SHARED: Linked Tags card */}
+                {boundTags.length > 0 && (
+                  <View style={styles.contactSelectorSection}>
+                    <Text style={styles.selectorLabel}>Linked Tags ({boundTags.length}):</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={{ marginTop: 4 }}>
+                      {boundTags.map((tg) => (
+                        <View key={tg} style={styles.contactPickerChip}>
+                          <Ionicons name="pricetag-outline" size={13} color="#059669" />
+                          <Text style={styles.contactPickerChipText} numberOfLines={1}>
+                            #{tg}
                           </Text>
                           <TouchableOpacity
-                            onPress={() => handleRemoveBoundContact(c.id)}
+                            onPress={() => handleRemoveBoundTag(tg)}
                             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                             style={{ marginLeft: 4 }}
                           >
-                            <Ionicons
-                              name="close-circle"
-                              size={14}
-                              color={isChosen ? '#FFFFFF' : '#64748B'}
-                            />
+                            <Ionicons name="close-circle" size={14} color="#64748B" />
                           </TouchableOpacity>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              )}
-
-              {/* SHARED: Linked Tags card */}
-              {boundTags.length > 0 && (
-                <View style={styles.contactSelectorSection}>
-                  <Text style={styles.selectorLabel}>Linked Tags ({boundTags.length}):</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={{ marginTop: 4 }}>
-                    {boundTags.map((tg) => (
-                      <View key={tg} style={styles.contactPickerChip}>
-                        <Ionicons name="pricetag-outline" size={13} color="#059669" />
-                        <Text style={styles.contactPickerChipText} numberOfLines={1}>
-                          #{tg}
-                        </Text>
-                        <TouchableOpacity
-                          onPress={() => handleRemoveBoundTag(tg)}
-                          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                          style={{ marginLeft: 4 }}
-                        >
-                          <Ionicons name="close-circle" size={14} color="#64748B" />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-
-              <View style={styles.helperBar}>
-                <Text style={styles.helperHint}>Shortcuts:</Text>
-                <TouchableOpacity
-                  style={styles.helperChip}
-                  onPress={() => handleInsertHelper('@')}
-                >
-                  <Text style={styles.helperChipText}>@ Mention Contact</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.helperChip}
-                  onPress={() => handleInsertHelper('#')}
-                >
-                  <Text style={styles.helperChipText}># Add Tag</Text>
-                </TouchableOpacity>
-
-                <View style={{ flex: 1 }} />
-
-                {(noteText.length > 0 || boundContacts.length > 0 || boundTags.length > 0) && (
-                  <TouchableOpacity
-                    style={styles.clearNoteBtn}
-                    onPress={() => {
-                      Haptics.selectionAsync().catch(() => {});
-                      setNoteText('');
-                      setBoundContacts([]);
-                      setBoundTags([]);
-                    }}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  >
-                    <Ionicons name="close-circle-outline" size={13} color="#EF4444" />
-                    <Text style={styles.clearNoteBtnText}>Clear</Text>
-                  </TouchableOpacity>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
                 )}
-              </View>
 
-              {/* Clean Note Input Box (No inner chips) */}
-              <View style={styles.noteBoxWrapper}>
-                <TextInput
-                  ref={noteInputRef}
-                  style={[styles.noteModalInput, { minHeight: Math.max(60, noteInputHeight) }]}
-                  multiline
-                  placeholder="Type note... use @ to mention contacts, # to add tags"
-                  placeholderTextColor="#94A3B8"
-                  value={noteText}
-                  onContentSizeChange={(e) => {
-                    setNoteInputHeight(e.nativeEvent.contentSize.height + 8);
-                  }}
-                  onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
-                  onChangeText={handleNoteTextChange}
-                />
-              </View>
-
-              {suggestionMode && (
-                <View style={styles.suggestionsContainer}>
-                  <ScrollView
-                    horizontal
-                    keyboardShouldPersistTaps="always"
-                    showsHorizontalScrollIndicator={false}
+                <View style={styles.helperBar}>
+                  <Text style={styles.helperHint}>Shortcuts:</Text>
+                  <TouchableOpacity
+                    style={styles.helperChip}
+                    onPress={() => handleInsertHelper('@')}
                   >
-                    {suggestionMode === 'contact' &&
-                      allContacts
-                        .filter((c) => c.Name.toLowerCase().includes(suggestionQuery))
-                        .slice(0, 8)
-                        .map((c) => (
-                          <TouchableOpacity
-                            key={c.id}
-                            style={styles.sugChip}
-                            onPress={() => handleSelectContactSuggestion(c)}
-                          >
-                            <Ionicons name="person-circle-outline" size={14} color="#2563EB" />
-                            <Text style={styles.sugChipText}>{c.Name}</Text>
-                          </TouchableOpacity>
-                        ))}
+                    <Text style={styles.helperChipText}>@ Link Contact</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.helperChip}
+                    onPress={() => handleInsertHelper('#')}
+                  >
+                    <Text style={styles.helperChipText}># Link Tag</Text>
+                  </TouchableOpacity>
 
-                    {suggestionMode === 'tag' &&
-                      availableTags
-                        .filter((t) => t.toLowerCase().includes(suggestionQuery))
-                        .slice(0, 8)
-                        .map((tg, idx) => (
-                          <TouchableOpacity
-                            key={idx}
-                            style={styles.sugChip}
-                            onPress={() => handleSelectTagSuggestion(tg)}
-                          >
-                            <Ionicons name="pricetag-outline" size={12} color="#2563EB" />
-                            <Text style={styles.sugChipText}>#{tg}</Text>
-                          </TouchableOpacity>
-                        ))}
-                  </ScrollView>
-                </View>
-              )}
+                  <View style={{ flex: 1 }} />
 
-              <Text style={styles.fieldLabel}>Due Date:</Text>
-              <View style={styles.quickDateRow}>
-                {[
-                  { label: 'Today', offset: 0, dateKey: presetDates.today },
-                  { label: 'Tomorrow', offset: 1, dateKey: presetDates.tomorrow },
-                  { label: 'In 3 Days', offset: 3, dateKey: presetDates.in3Days },
-                  { label: 'Next Week', offset: 7, dateKey: presetDates.nextWeek },
-                ].map((p, idx) => {
-                  const isHighlighted = dueDate === p.dateKey;
-                  return (
+                  {(noteText.length > 0 || boundContacts.length > 0 || boundTags.length > 0) && (
                     <TouchableOpacity
-                      key={idx}
-                      style={[styles.quickDateChip, isHighlighted && styles.quickDateChipHighlighted]}
-                      onPress={() => setQuickDate(p.offset)}
+                      style={styles.clearNoteBtn}
+                      onPress={() => {
+                        Haptics.selectionAsync().catch(() => {});
+                        setNoteText('');
+                        setBoundContacts([]);
+                        setBoundTags([]);
+                      }}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                     >
-                      <Text
-                        style={[
-                          styles.quickDateChipText,
-                          isHighlighted && styles.quickDateChipTextHighlighted,
-                        ]}
-                      >
-                        {p.label}
-                      </Text>
+                      <Ionicons name="close-circle-outline" size={13} color="#EF4444" />
+                      <Text style={styles.clearNoteBtnText}>Clear All</Text>
                     </TouchableOpacity>
-                  );
-                })}
-              </View>
+                  )}
+                </View>
 
-              <TouchableOpacity
-                style={styles.dateInputRow}
-                onPress={() => {
-                  Haptics.selectionAsync().catch(() => {});
-                  const currentSelected = new Date(dueDate);
-                  if (!isNaN(currentSelected.getTime())) {
-                    setCalendarViewDate(currentSelected);
-                  }
-                  setIsCalendarPickerVisible(true);
-                }}
-                activeOpacity={0.75}
-              >
-                <Ionicons name="calendar" size={17} color="#2563EB" />
-                <Text style={styles.dateInputText}>{formatToDDMMYYYY(dueDate)}</Text>
-                <Text style={styles.calendarPickAction}>Pick Calendar ▾</Text>
-              </TouchableOpacity>
+                {/* Clean Note Input Box */}
+                <View style={styles.noteBoxWrapper}>
+                  <TextInput
+                    ref={noteInputRef}
+                    style={[styles.noteModalInput, { minHeight: Math.max(60, noteInputHeight) }]}
+                    multiline
+                    placeholder="Type note here... use @ or # to link contacts/tags"
+                    placeholderTextColor="#94A3B8"
+                    value={noteText}
+                    onContentSizeChange={(e) => {
+                      setNoteInputHeight(e.nativeEvent.contentSize.height + 8);
+                    }}
+                    onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+                    onChangeText={handleNoteTextChange}
+                  />
+                </View>
 
-              <View style={styles.timeSectionHeaderRow}>
-                <Text style={styles.fieldLabel}>Reminder Time (Optional):</Text>
+                {suggestionMode && (
+                  <View style={styles.suggestionsContainer}>
+                    <ScrollView
+                      horizontal
+                      keyboardShouldPersistTaps="always"
+                      showsHorizontalScrollIndicator={false}
+                    >
+                      {suggestionMode === 'contact' &&
+                        allContacts
+                          .filter((c) => c.Name.toLowerCase().includes(suggestionQuery))
+                          .slice(0, 10)
+                          .map((c) => {
+                            const primaryTag = c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag';
+                            return (
+                              <TouchableOpacity
+                                key={c.id}
+                                style={styles.sugChip}
+                                onPress={() => handleSelectContactSuggestion(c)}
+                              >
+                                <Ionicons name="person-circle-outline" size={14} color="#2563EB" />
+                                <Text style={styles.sugChipText}>
+                                  {c.Name} ({primaryTag})
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+
+                      {suggestionMode === 'tag' &&
+                        availableTags
+                          .filter((t) => t.toLowerCase().includes(suggestionQuery))
+                          .slice(0, 10)
+                          .map((tg, idx) => (
+                            <TouchableOpacity
+                              key={idx}
+                              style={styles.sugChip}
+                              onPress={() => handleSelectTagSuggestion(tg)}
+                            >
+                              <Ionicons name="pricetag-outline" size={12} color="#2563EB" />
+                              <Text style={styles.sugChipText}>#{tg}</Text>
+                            </TouchableOpacity>
+                          ))}
+                    </ScrollView>
+                  </View>
+                )}
+
+                <Text style={styles.fieldLabel}>Due Date:</Text>
+                <View style={styles.quickDateRow}>
+                  {[
+                    { label: 'Today', offset: 0, dateKey: presetDates.today },
+                    { label: 'Tomorrow', offset: 1, dateKey: presetDates.tomorrow },
+                    { label: 'In 3 Days', offset: 3, dateKey: presetDates.in3Days },
+                    { label: 'Next Week', offset: 7, dateKey: presetDates.nextWeek },
+                  ].map((p, idx) => {
+                    const isHighlighted = dueDate === p.dateKey;
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        style={[styles.quickDateChip, isHighlighted && styles.quickDateChipHighlighted]}
+                        onPress={() => setQuickDate(p.offset)}
+                      >
+                        <Text
+                          style={[
+                            styles.quickDateChipText,
+                            isHighlighted && styles.quickDateChipTextHighlighted,
+                          ]}
+                        >
+                          {p.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
                 <TouchableOpacity
+                  style={styles.dateInputRow}
                   onPress={() => {
                     Haptics.selectionAsync().catch(() => {});
-                    setIsTimeEnabled((prev) => !prev);
+                    const currentSelected = new Date(dueDate);
+                    if (!isNaN(currentSelected.getTime())) {
+                      setCalendarViewDate(currentSelected);
+                    }
+                    setIsCalendarPickerVisible(true);
                   }}
+                  activeOpacity={0.75}
                 >
-                  <Text style={styles.timeToggleActionText}>
-                    {isTimeEnabled ? 'Remove Time' : '+ Add Time'}
-                  </Text>
+                  <Ionicons name="calendar" size={17} color="#2563EB" />
+                  <Text style={styles.dateInputText}>{formatToDDMMYYYY(dueDate)}</Text>
+                  <Text style={styles.calendarPickAction}>Pick Calendar ▾</Text>
                 </TouchableOpacity>
-              </View>
 
-              {isTimeEnabled && (
-                <View style={styles.wheelTimePickerCard}>
-                  <View style={styles.wheelPickerRow}>
-                    <View style={styles.wheelColumnWrapper}>
-                      <Text style={styles.wheelColumnTitle}>HOUR</Text>
-                      <ScrollView
-                        ref={hourScrollRef}
-                        style={styles.wheelScrollView}
-                        showsVerticalScrollIndicator={false}
-                        nestedScrollEnabled={true}
-                      >
-                        {HOURS.map((h) => {
-                          const isSel = timeHour === h;
-                          return (
-                            <TouchableOpacity
-                              key={h}
-                              style={[styles.wheelItem, isSel && styles.wheelItemSelected]}
-                              onPress={() => {
-                                Haptics.selectionAsync().catch(() => {});
-                                setTimeHour(h);
-                              }}
-                            >
-                              <Text style={[styles.wheelItemText, isSel && styles.wheelItemTextSelected]}>
-                                {h}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
-                    </View>
+                <View style={styles.timeSectionHeaderRow}>
+                  <Text style={styles.fieldLabel}>Reminder Time (Optional):</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      Haptics.selectionAsync().catch(() => {});
+                      setIsTimeEnabled((prev) => !prev);
+                    }}
+                  >
+                    <Text style={styles.timeToggleActionText}>
+                      {isTimeEnabled ? 'Remove Time' : '+ Add Time'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
 
-                    <Text style={styles.wheelSeparator}>:</Text>
-
-                    <View style={styles.wheelColumnWrapper}>
-                      <Text style={styles.wheelColumnTitle}>MIN</Text>
-                      <ScrollView
-                        ref={minuteScrollRef}
-                        style={styles.wheelScrollView}
-                        showsVerticalScrollIndicator={false}
-                        nestedScrollEnabled={true}
-                      >
-                        {MINUTES.map((m) => {
-                          const isSel = timeMinute === m;
-                          return (
-                            <TouchableOpacity
-                              key={m}
-                              style={[styles.wheelItem, isSel && styles.wheelItemSelected]}
-                              onPress={() => {
-                                Haptics.selectionAsync().catch(() => {});
-                                setTimeMinute(m);
-                              }}
-                            >
-                              <Text style={[styles.wheelItemText, isSel && styles.wheelItemTextSelected]}>
-                                {m}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
-                    </View>
-
-                    <View style={styles.meridianWheelWrapper}>
-                      <Text style={styles.wheelColumnTitle}>AM / PM</Text>
-                      <View style={styles.meridianToggleBox}>
-                        <TouchableOpacity
-                          style={[styles.meridianToggleBtn, timePeriod === 'AM' && styles.meridianToggleBtnActive]}
-                          onPress={() => {
-                            Haptics.selectionAsync().catch(() => {});
-                            setTimePeriod('AM');
-                          }}
+                {isTimeEnabled && (
+                  <View style={styles.wheelTimePickerCard}>
+                    <View style={styles.wheelPickerRow}>
+                      <View style={styles.wheelColumnWrapper}>
+                        <Text style={styles.wheelColumnTitle}>HOUR</Text>
+                        <ScrollView
+                          ref={hourScrollRef}
+                          style={styles.wheelScrollView}
+                          showsVerticalScrollIndicator={false}
+                          nestedScrollEnabled={true}
                         >
-                          <Text style={[styles.meridianToggleText, timePeriod === 'AM' && styles.meridianToggleTextActive]}>
-                            AM
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.meridianToggleBtn, timePeriod === 'PM' && styles.meridianToggleBtnActive]}
-                          onPress={() => {
-                            Haptics.selectionAsync().catch(() => {});
-                            setTimePeriod('PM');
-                          }}
+                          {HOURS.map((h) => {
+                            const isSel = timeHour === h;
+                            return (
+                              <TouchableOpacity
+                                key={h}
+                                style={[styles.wheelItem, isSel && styles.wheelItemSelected]}
+                                onPress={() => {
+                                  Haptics.selectionAsync().catch(() => {});
+                                  setTimeHour(h);
+                                }}
+                              >
+                                <Text style={[styles.wheelItemText, isSel && styles.wheelItemTextSelected]}>
+                                  {h}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      </View>
+
+                      <Text style={styles.wheelSeparator}>:</Text>
+
+                      <View style={styles.wheelColumnWrapper}>
+                        <Text style={styles.wheelColumnTitle}>MIN</Text>
+                        <ScrollView
+                          ref={minuteScrollRef}
+                          style={styles.wheelScrollView}
+                          showsVerticalScrollIndicator={false}
+                          nestedScrollEnabled={true}
                         >
-                          <Text style={[styles.meridianToggleText, timePeriod === 'PM' && styles.meridianToggleTextActive]}>
-                            PM
-                          </Text>
-                        </TouchableOpacity>
+                          {MINUTES.map((m) => {
+                            const isSel = timeMinute === m;
+                            return (
+                              <TouchableOpacity
+                                key={m}
+                                style={[styles.wheelItem, isSel && styles.wheelItemSelected]}
+                                onPress={() => {
+                                  Haptics.selectionAsync().catch(() => {});
+                                  setTimeMinute(m);
+                                }}
+                              >
+                                <Text style={[styles.wheelItemText, isSel && styles.wheelItemTextSelected]}>
+                                  {m}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      </View>
+
+                      <View style={styles.meridianWheelWrapper}>
+                        <Text style={styles.wheelColumnTitle}>AM / PM</Text>
+                        <View style={styles.meridianToggleBox}>
+                          <TouchableOpacity
+                            style={[styles.meridianToggleBtn, timePeriod === 'AM' && styles.meridianToggleBtnActive]}
+                            onPress={() => {
+                              Haptics.selectionAsync().catch(() => {});
+                              setTimePeriod('AM');
+                            }}
+                          >
+                            <Text style={[styles.meridianToggleText, timePeriod === 'AM' && styles.meridianToggleTextActive]}>
+                              AM
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.meridianToggleBtn, timePeriod === 'PM' && styles.meridianToggleBtnActive]}
+                            onPress={() => {
+                              Haptics.selectionAsync().catch(() => {});
+                              setTimePeriod('PM');
+                            }}
+                          >
+                            <Text style={[styles.meridianToggleText, timePeriod === 'PM' && styles.meridianToggleTextActive]}>
+                              PM
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
                       </View>
                     </View>
-                  </View>
 
-                  <View style={styles.timePreviewBadge}>
-                    <Ionicons name="time" size={13} color="#2563EB" />
-                    <Text style={styles.timePreviewBadgeText}>
-                      Selected: {timeHour}:{timeMinute} {timePeriod}
+                    <View style={styles.timePreviewBadge}>
+                      <Ionicons name="time" size={13} color="#2563EB" />
+                      <Text style={styles.timePreviewBadgeText}>
+                        Selected: {timeHour}:{timeMinute} {timePeriod}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                <View style={styles.modalBtnRow}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalCancelBtn]}
+                    onPress={() => setIsCreateModalVisible(false)}
+                  >
+                    <Text style={styles.modalCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalSubmitBtn]}
+                    onPress={handleSaveFollowup}
+                  >
+                    <Text style={styles.modalSubmitText}>
+                      {editingItem ? 'Update Follow-up' : 'Save Follow-up'}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 </View>
-              )}
-
-              <View style={styles.modalBtnRow}>
-                <TouchableOpacity
-                  style={[styles.modalBtn, styles.modalCancelBtn]}
-                  onPress={() => setIsCreateModalVisible(false)}
-                >
-                  <Text style={styles.modalCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalBtn, styles.modalSubmitBtn]}
-                  onPress={handleSaveFollowup}
-                >
-                  <Text style={styles.modalSubmitText}>
-                    {editingItem ? 'Update Follow-up' : 'Save Follow-up'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
+              </ScrollView>
+            </KeyboardAvoidingView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -2469,20 +2453,7 @@ const styles = StyleSheet.create({
     fontSize: 13.5,
     lineHeight: 19,
     marginTop: 6,
-  },
-  noteProseText: {
     color: '#0F172A',
-    fontWeight: '400',
-  },
-  noteMentionHighlight: {
-    fontWeight: '700',
-    color: '#1D4ED8',
-    backgroundColor: '#EEF2FF',
-  },
-  noteTagHighlight: {
-    fontWeight: '700',
-    color: '#2563EB',
-    backgroundColor: '#EFF6FF',
   },
   taskCohortContainer: {
     backgroundColor: '#F8FAFC',
@@ -2735,11 +2706,6 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     color: '#64748B',
     textDecorationLine: 'line-through',
-  },
-  completedDateSub: {
-    fontSize: 10.5,
-    color: '#94A3B8',
-    marginTop: 2,
   },
   completedItemActions: {
     flexDirection: 'row',
@@ -3015,44 +2981,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
     padding: 8,
     marginBottom: 8,
-  },
-  inlineChipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 6,
-  },
-  inlineContactChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-    paddingHorizontal: 7,
-    paddingVertical: 3.5,
-    borderRadius: 6,
-  },
-  inlineContactChipText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#1D4ED8',
-  },
-  inlineTagChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#ECFDF5',
-    borderWidth: 1,
-    borderColor: '#A7F3D0',
-    paddingHorizontal: 7,
-    paddingVertical: 3.5,
-    borderRadius: 6,
-  },
-  inlineTagChipText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#059669',
   },
   noteModalInput: {
     fontSize: 14,

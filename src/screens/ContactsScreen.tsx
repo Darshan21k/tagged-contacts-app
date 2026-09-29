@@ -1076,6 +1076,21 @@ export default function ContactsScreen({ navigation, route }: any) {
     });
   }, [allContacts, isStarredFilterActive, selectedTag, searchQuery, isSelectionMode, selectedContactIds, contactsMap, linkedPeopleMap]);
 
+  // Updated Validator: Strictly requires at least 10 digits (ignoring spaces, dashes, or +91 prefixes)
+  const getCleanPhoneNumber = (input: string) => {
+    const cleaned = input.trim().replace(/(?!^\+)[^\d]/g, '');
+    // Extract only digits to count them properly
+    const digitsOnly = cleaned.replace(/\D/g, '');
+    
+    // Check if it has 10 or more digits (standard mobile number length)
+    const isValidMobile = digitsOnly.length >= 10 && digitsOnly.length <= 15;
+    return isValidMobile ? cleaned : null;
+  };
+
+  const sanitizedSearchPhone = useMemo(() => {
+    return getCleanPhoneNumber(searchQuery);
+  }, [searchQuery]);
+
   const sections = useMemo(() => {
     return [{ title: 'contacts', data: filteredContacts }];
   }, [filteredContacts]);
@@ -1880,6 +1895,20 @@ export default function ContactsScreen({ navigation, route }: any) {
           </TouchableOpacity>
         </View>
 
+        {/* Quick WhatsApp Banner when searching an unknown pasted number */}
+        {sanitizedSearchPhone && filteredContacts.length === 0 && (
+          <TouchableOpacity
+            style={styles.quickWhatsAppBanner}
+            onPress={() => handleWhatsApp(sanitizedSearchPhone)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="logo-whatsapp" size={16} color="#FFFFFF" />
+            <Text style={styles.quickWhatsAppBannerText}>
+              Open WhatsApp chat with {searchQuery.trim()}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {suggestions.length > 0 && (
           <View style={styles.suggestionsDropdown}>
             {suggestions.map((item, idx) => (
@@ -2045,6 +2074,9 @@ export default function ContactsScreen({ navigation, route }: any) {
     navigation,
     userPhone,
     saveSearchState,
+    sanitizedSearchPhone,
+    filteredContacts.length,
+    handleWhatsApp,
   ]);
 
   const renderStickySectionHeader = useCallback(() => {
@@ -2737,6 +2769,27 @@ const styles = StyleSheet.create({
   searchIcon: { marginRight: 8 },
   searchInput: { flex: 1, height: 42, fontSize: 14, color: '#0F172A' },
   tagFilterBtn: { padding: 4, marginLeft: 4 },
+  quickWhatsAppBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#25D366',
+    marginHorizontal: 16,
+    marginTop: 2,
+    marginBottom: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+  },
+  quickWhatsAppBannerText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   suggestionsDropdown: {
     backgroundColor: '#FFFFFF',
     marginHorizontal: 16,

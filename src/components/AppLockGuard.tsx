@@ -21,12 +21,13 @@ export default function AppLockGuard({ children }: { children: React.ReactNode }
   const [isAuthenticatingSuccess, setIsAuthenticatingSuccess] = useState(false);
 
   const appState = useRef(AppState.currentState);
+  const backgroundTimestamp = useRef<number | null>(null);
 
   // Animation drivers
   const cardScale = useRef(new Animated.Value(1)).current;
   const cardOpacity = useRef(new Animated.Value(1)).current;
 
-  const checkLockAndAuthenticate = async () => {
+  const checkLockAndAuthenticate = async (isStartup = false) => {
     try {
       const lockSetting = await AsyncStorage.getItem('app_lock_enabled');
       const enabled = lockSetting === 'true';
@@ -45,6 +46,19 @@ export default function AppLockGuard({ children }: { children: React.ReactNode }
         return;
       }
 
+      // If it's a resume from background, enforce the 5-minute WhatsApp-style timeout
+      if (!isStartup && backgroundTimestamp.current) {
+        const elapsedMinutes = (Date.now() - backgroundTimestamp.current) / 1000 / 60;
+        const TIMEOUT_LIMIT_MINUTES = 5; // 5-minute WhatsApp grace period
+
+        if (elapsedMinutes < TIMEOUT_LIMIT_MINUTES) {
+          // Kept unlocked because user was away for less than 5 minutes
+          setIsUnlocked(true);
+          return;
+        }
+      }
+
+      // Otherwise, trigger the lock screen prompt
       setIsUnlocked(false);
       setIsAuthenticatingSuccess(false);
       cardScale.setValue(1);
@@ -105,14 +119,16 @@ export default function AppLockGuard({ children }: { children: React.ReactNode }
   };
 
   useEffect(() => {
-    checkLockAndAuthenticate();
+    // Initial app startup check
+    checkLockAndAuthenticate(true);
 
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      if (
-        appState.current.match(/inactive|background/) &&
-        nextAppState === 'active'
-      ) {
-        checkLockAndAuthenticate();
+      if (appState.current.match(/active/) && nextAppState.match(/inactive|background/)) {
+        // App went into the background or phone screen locked
+        backgroundTimestamp.current = Date.now();
+      } else if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        // App returned to the foreground
+        checkLockAndAuthenticate(false);
       }
       appState.current = nextAppState;
     });
