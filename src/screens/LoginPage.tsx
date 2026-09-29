@@ -31,7 +31,7 @@ export default function LoginPage({ navigation }: any) {
   }, []);
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: any;
     if (isOtpSent && countdown > 0) {
       timer = setInterval(() => setCountdown((prev) => prev - 1), 1000);
     }
@@ -173,7 +173,6 @@ export default function LoginPage({ navigation }: any) {
           {/* Custom App Logo above frame */}
           <View style={styles.logoWrapper}>
             <Image
-              
               source={require('../../assets/icon.png')}
               style={styles.appLogo}
               resizeMode="contain"
@@ -188,6 +187,7 @@ export default function LoginPage({ navigation }: any) {
             <TextInput
               style={[styles.input, isOtpSent && styles.disabledInput]}
               placeholder="Enter 10-digit number"
+              placeholderTextColor="#94A3B8"
               keyboardType="numeric"
               maxLength={10}
               value={mobileNumber}
@@ -201,6 +201,7 @@ export default function LoginPage({ navigation }: any) {
                 <TextInput
                   style={styles.input}
                   placeholder="Enter 6-digit OTP"
+                  placeholderTextColor="#94A3B8"
                   keyboardType="numeric"
                   value={otp}
                   onChangeText={setOtp}
@@ -291,6 +292,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 16,
     backgroundColor: '#FFFFFF',
+    color: '#0F172A',
   },
   disabledInput: {
     backgroundColor: '#F1F5F9',

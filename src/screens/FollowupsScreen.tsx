@@ -122,6 +122,36 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
   useEffect(() => {
     navigation.setOptions({ headerShown: false });
+
+    // Request local notification permissions and set up Android channel for production/APK builds
+    (async () => {
+      try {
+        const Notifications = require('expo-notifications');
+        
+        if (Platform.OS === 'android' && Notifications.setNotificationChannelAsync) {
+          await Notifications.setNotificationChannelAsync('default', {
+            name: 'Default',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#2563EB',
+          });
+        }
+
+        if (Notifications.getPermissionsAsync && Notifications.requestPermissionsAsync) {
+          const { status: existingStatus } = await Notifications.getPermissionsAsync();
+          let finalStatus = existingStatus;
+          if (existingStatus !== 'granted') {
+            const { status } = await Notifications.requestPermissionsAsync();
+            finalStatus = status;
+          }
+          if (finalStatus !== 'granted') {
+            console.log('Notification permission not granted.');
+          }
+        }
+      } catch (err) {
+        // Silently bypassed if running inside standard Expo Go sandbox
+      }
+    })();
   }, [navigation]);
 
   const showCenteredToast = useCallback(
@@ -859,7 +889,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
   ) => {
     if (!dueT) return;
     try {
-      // Safely check if native notifications module can be executed without crashing Expo Go
       const Notifications = require('expo-notifications');
       if (!Notifications || typeof Notifications.scheduleNotificationAsync !== 'function') {
         return;
