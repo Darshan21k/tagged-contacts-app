@@ -6,6 +6,7 @@ export interface Contact {
   OtherDetails?: string;
   Userphonenumber: string;
   is_starred?: boolean;
+  is_search_priority?: boolean;
   created_at?: string;
   LinkedContactPhone?: string | null;
 }

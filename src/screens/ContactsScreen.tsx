@@ -58,6 +58,7 @@ interface ContactCardProps {
   onTagPress: (tag: string) => void;
   onCopyPhone: (phone: string) => void;
   onToggleStar: (contact: Contact) => void;
+  onTogglePriorityStar: (contact: Contact) => void;
   onFollowupBellPress: (contact: Contact) => void;
   onSwipeFollowupPress: (contact: Contact, hasActive: boolean) => void;
   searchQuery: string;
@@ -82,6 +83,7 @@ const ContactCard = React.memo(
     onTagPress,
     onCopyPhone,
     onToggleStar,
+    onTogglePriorityStar,
     onFollowupBellPress,
     onSwipeFollowupPress,
     activeTerms,
@@ -91,6 +93,7 @@ const ContactCard = React.memo(
     onLinkedBadgeLongPress,
   }: ContactCardProps) => {
     const isStarred = Boolean(item.is_starred);
+    const isSearchPriority = Boolean(item.is_search_priority);
     const swipeableRef = useRef<Swipeable>(null);
 
     const tagList = useMemo(() => {
@@ -292,13 +295,21 @@ const ContactCard = React.memo(
                   {!isSelectionMode && (
                     <TouchableOpacity
                       onPress={() => onToggleStar(item)}
+                      onLongPress={() => onTogglePriorityStar(item)}
+                      delayLongPress={400}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       activeOpacity={0.7}
                     >
                       <Ionicons
-                        name={isStarred ? 'star' : 'star-outline'}
+                        name={isStarred || isSearchPriority ? 'star' : 'star-outline'}
                         size={18}
-                        color={isStarred ? '#F59E0B' : '#94A3B8'}
+                        color={
+                          isSearchPriority
+                            ? '#38BDF8' // Light Blue for Search Priority
+                            : isStarred
+                            ? '#F59E0B' // Yellow for Standard Star
+                            : '#94A3B8' // Gray for Unstarred
+                        }
                       />
                     </TouchableOpacity>
                   )}
@@ -457,6 +468,7 @@ export default function ContactsScreen({ navigation, route }: any) {
   const [activeFollowups, setActiveFollowups] = useState<FollowupItem[]>([]);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [isStarredFilterActive, setIsStarredFilterActive] = useState<boolean>(false);
+  const [isPriorityFilterActive, setIsPriorityFilterActive] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const activeTerms = useMemo(() => {
@@ -551,6 +563,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       const chosenTag = route.params.selectedTag ? route.params.selectedTag.trim() : '';
       setSelectedTag(chosenTag || null);
       setIsStarredFilterActive(false);
+      setIsPriorityFilterActive(false);
       setSearchQuery(chosenTag);
       setShowSuggestions(false);
       saveSearchState(chosenTag, chosenTag || null, false);
@@ -709,10 +722,11 @@ export default function ContactsScreen({ navigation, route }: any) {
     setRefreshing(true);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    if (searchQuery || selectedTag || isStarredFilterActive) {
+    if (searchQuery || selectedTag || isStarredFilterActive || isPriorityFilterActive) {
       setSearchQuery('');
       setSelectedTag(null);
       setIsStarredFilterActive(false);
+      setIsPriorityFilterActive(false);
       setShowSuggestions(false);
       Keyboard.dismiss();
       saveSearchState('', null, false);
@@ -732,6 +746,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     searchQuery,
     selectedTag,
     isStarredFilterActive,
+    isPriorityFilterActive,
     fetchPinnedTags,
     fetchContactsData,
     fetchFollowupsData,
@@ -744,6 +759,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     setSearchQuery('');
     setSelectedTag(null);
     setIsStarredFilterActive(false);
+    setIsPriorityFilterActive(false);
     setIsSelectionMode(false);
     setSelectedContactIds(new Set());
     setShowSuggestions(false);
@@ -782,28 +798,79 @@ export default function ContactsScreen({ navigation, route }: any) {
     return unsubscribe;
   }, [navigation, handleResetAndRefresh, closeActiveSwipeable]);
 
+  // Single Tap: Turns star Yellow (is_starred = true, is_search_priority = false).
   const handleToggleStar = useCallback(
     async (contact: Contact) => {
-      const targetStarred = !contact.is_starred;
+      const isCurrentlyActive = Boolean(contact.is_starred || contact.is_search_priority);
+      const targetStarred = !isCurrentlyActive;
+      const targetPriority = false;
+
       await Haptics.selectionAsync();
 
       setAllContacts((prev) =>
-        prev.map((c) => (c.id === contact.id ? { ...c, is_starred: targetStarred } : c))
+        prev.map((c) =>
+          c.id === contact.id
+            ? { ...c, is_starred: targetStarred, is_search_priority: targetPriority }
+            : c
+        )
       );
-      showToast(targetStarred ? `Starred ${contact.Name}` : `Removed from Starred`);
+      showToast(targetStarred ? `Starred ${contact.Name}` : `Removed star`);
 
       try {
         const { error } = await supabase
           .from('Contacts_Table')
-          .update({ is_starred: targetStarred })
+          .update({ is_starred: targetStarred, is_search_priority: targetPriority })
           .eq('id', contact.id);
 
         if (error) throw error;
       } catch {
         setAllContacts((prev) =>
-          prev.map((c) => (c.id === contact.id ? { ...c, is_starred: !targetStarred } : c))
+          prev.map((c) =>
+            c.id === contact.id
+              ? { ...c, is_starred: contact.is_starred, is_search_priority: contact.is_search_priority }
+              : c
+          )
         );
-        Alert.alert('Error', 'Failed to update favorite status. Please check your connection.');
+        Alert.alert('Error', 'Failed to update star status.');
+      }
+    },
+    [showToast]
+  );
+
+  // Long Press: Turns star Light Blue (is_search_priority = true, is_starred = false)
+  const handleTogglePriorityStar = useCallback(
+    async (contact: Contact) => {
+      const isCurrentlyPriority = Boolean(contact.is_search_priority);
+      const targetStarred = false;
+      const targetPriority = !isCurrentlyPriority;
+
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      setAllContacts((prev) =>
+        prev.map((c) =>
+          c.id === contact.id
+            ? { ...c, is_starred: targetStarred, is_search_priority: targetPriority }
+            : c
+        )
+      );
+      showToast(targetPriority ? `Set Search Priority for ${contact.Name}` : `Removed search priority`);
+
+      try {
+        const { error } = await supabase
+          .from('Contacts_Table')
+          .update({ is_starred: targetStarred, is_search_priority: targetPriority })
+          .eq('id', contact.id);
+
+        if (error) throw error;
+      } catch {
+        setAllContacts((prev) =>
+          prev.map((c) =>
+            c.id === contact.id
+              ? { ...c, is_starred: contact.is_starred, is_search_priority: contact.is_search_priority }
+              : c
+          )
+        );
+        Alert.alert('Error', 'Failed to update priority status.');
       }
     },
     [showToast]
@@ -867,7 +934,11 @@ export default function ContactsScreen({ navigation, route }: any) {
   }, [allContacts, linkedPeopleMap]);
 
   const totalStarredCount = useMemo(() => {
-    return allContacts.filter((c) => c.is_starred).length;
+    return allContacts.filter((c) => Boolean(c.is_starred)).length;
+  }, [allContacts]);
+
+  const totalPriorityCount = useMemo(() => {
+    return allContacts.filter((c) => Boolean(c.is_search_priority)).length;
   }, [allContacts]);
 
   const suggestions = useMemo(() => {
@@ -968,11 +1039,16 @@ export default function ContactsScreen({ navigation, route }: any) {
     };
   }, [bulkTagInput, pinnedTags, allContacts, stagedBulkTags, stagedBulkLinks]);
 
+  // Upgraded token-based filtering and ranking with exact tag prioritization & star floating
   const filteredContacts = useMemo(() => {
     let result = allContacts;
 
     if (isStarredFilterActive) {
       result = result.filter((c) => Boolean(c.is_starred));
+    }
+
+    if (isPriorityFilterActive) {
+      result = result.filter((c) => Boolean(c.is_search_priority));
     }
 
     if (selectedTag && selectedTag.trim()) {
@@ -1016,44 +1092,69 @@ export default function ContactsScreen({ navigation, route }: any) {
 
     const rawQuery = searchQuery.trim().toLowerCase();
     if (rawQuery) {
-      const terms = rawQuery.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+      const searchWords = rawQuery.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
 
-      result = result.filter((c) => {
-        const contactName = (c.Name || '').toLowerCase();
-        const contactPhone = c.Phonenumber || '';
-        const contactTags = (c.Tags || '').toLowerCase();
-        const contactDetails = (c.OtherDetails || '').toLowerCase();
+      result = result
+        .map((c) => {
+          const contactName = (c.Name || '').toLowerCase();
+          const contactPhone = c.Phonenumber || '';
+          const contactDetails = (c.OtherDetails || '').toLowerCase();
 
-        const directMatch = terms.every(
-          (term) =>
-            contactName.includes(term) ||
-            contactPhone.includes(term) ||
-            contactTags.includes(term) ||
-            contactDetails.includes(term)
-        );
+          const rawTags = c.Tags
+            ? c.Tags.split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean)
+            : [];
 
-        if (directMatch) return true;
+          let nameMatch = searchWords.every((word) => contactName.includes(word));
+          let phoneMatch = searchWords.every((word) => contactPhone.includes(word));
+          let notesMatch = searchWords.every((word) => contactDetails.includes(word));
 
-        const linkedPhones = ((c as any).LinkedContactPhone || '')
-          .split(',')
-          .map((p: string) => p.trim().slice(-10))
-          .filter(Boolean);
+          let exactTagMatchCount = 0;
+          let allWordsFoundInTags = searchWords.every((word) => 
+            rawTags.some((tag) => tag.includes(word))
+          );
 
-        if (linkedPhones.length === 0) return false;
-
-        return terms.every((term) => {
-          return linkedPhones.some((lPhone: string) => {
-            const linkedPerson = contactsMap.get(lPhone);
-            if (!linkedPerson) return false;
-
-            const lName = (linkedPerson.Name || '').toLowerCase();
-            const lPhoneRaw = linkedPerson.Phonenumber || '';
-            const lTags = (linkedPerson.Tags || '').toLowerCase();
-
-            return lName.includes(term) || lPhoneRaw.includes(term) || lTags.includes(term);
+          searchWords.forEach((word) => {
+            rawTags.forEach((tag) => {
+              if (tag === word) {
+                exactTagMatchCount++;
+              }
+            });
           });
-        });
-      });
+
+          const isPrimaryMatch = nameMatch || phoneMatch || allWordsFoundInTags;
+          let isRelevant = isPrimaryMatch || notesMatch;
+
+          return {
+            contact: c,
+            isRelevant,
+            exactTagMatchCount,
+            isPrimaryMatch,
+            notesMatch,
+          };
+        })
+        .filter((item) => item.isRelevant)
+        .sort((a, b) => {
+          // PRIORITY 0: Light Blue Star (Search Priority) floats absolute first during search
+          if (Boolean(b.contact.is_search_priority) !== Boolean(a.contact.is_search_priority)) {
+            return b.contact.is_search_priority ? 1 : -1;
+          }
+
+          // PRIORITY 0.5: Yellow Star (Standard Star) floats second during search
+          if (Boolean(b.contact.is_starred) !== Boolean(a.contact.is_starred)) {
+            return b.contact.is_starred ? 1 : -1;
+          }
+
+          // PRIORITY 1: Exact whole-tag match count comes next
+          if (b.exactTagMatchCount !== a.exactTagMatchCount) {
+            return b.exactTagMatchCount - a.exactTagMatchCount;
+          }
+
+          // Priority 2: Alphabetical by Name
+          return (a.contact.Name || '').localeCompare(b.contact.Name || '');
+        })
+        .map((item) => item.contact);
+
+      return result;
     }
 
     const isFilteringOrSearching = Boolean(searchQuery.trim() || selectedTag);
@@ -1068,21 +1169,20 @@ export default function ContactsScreen({ navigation, route }: any) {
       }
 
       if (isFilteringOrSearching) {
+        if (Boolean(a.is_search_priority) !== Boolean(b.is_search_priority)) {
+          return a.is_search_priority ? -1 : 1;
+        }
         if (Boolean(a.is_starred) !== Boolean(b.is_starred)) {
           return a.is_starred ? -1 : 1;
         }
       }
       return (a.Name || '').localeCompare(b.Name || '');
     });
-  }, [allContacts, isStarredFilterActive, selectedTag, searchQuery, isSelectionMode, selectedContactIds, contactsMap, linkedPeopleMap]);
+  }, [allContacts, isStarredFilterActive, isPriorityFilterActive, selectedTag, searchQuery, isSelectionMode, selectedContactIds, contactsMap, linkedPeopleMap]);
 
-  // Updated Validator: Strictly requires at least 10 digits (ignoring spaces, dashes, or +91 prefixes)
   const getCleanPhoneNumber = (input: string) => {
     const cleaned = input.trim().replace(/(?!^\+)[^\d]/g, '');
-    // Extract only digits to count them properly
     const digitsOnly = cleaned.replace(/\D/g, '');
-    
-    // Check if it has 10 or more digits (standard mobile number length)
     const isValidMobile = digitsOnly.length >= 10 && digitsOnly.length <= 15;
     return isValidMobile ? cleaned : null;
   };
@@ -1581,6 +1681,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     closeActiveSwipeable();
     setSearchQuery(text);
     setIsStarredFilterActive(false);
+    setIsPriorityFilterActive(false);
     if (type === 'tag') {
       setSelectedTag(text);
       saveSearchState(text, text, false);
@@ -1606,6 +1707,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
 
     setIsStarredFilterActive(false);
+    setIsPriorityFilterActive(false);
 
     if (!tag) {
       setSelectedTag(null);
@@ -1644,11 +1746,36 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
 
     setSelectedTag(null);
+    setIsPriorityFilterActive(false);
     setSearchQuery('');
     setShowSuggestions(false);
     setIsStarredFilterActive((prev) => {
       const next = !prev;
       saveSearchState('', null, next);
+      return next;
+    });
+  }, [closeActiveSwipeable, saveSearchState]);
+
+  const handleTogglePriorityTag = useCallback(() => {
+    closeActiveSwipeable();
+    try {
+      sectionListRef.current?.scrollToLocation({
+        sectionIndex: 0,
+        itemIndex: 0,
+        viewOffset: 0,
+        animated: true,
+      });
+    } catch {
+      // Safe fallback
+    }
+
+    setSelectedTag(null);
+    setIsStarredFilterActive(false);
+    setSearchQuery('');
+    setShowSuggestions(false);
+    setIsPriorityFilterActive((prev) => {
+      const next = !prev;
+      saveSearchState('', null, false);
       return next;
     });
   }, [closeActiveSwipeable, saveSearchState]);
@@ -1661,6 +1788,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       onSelectTag: (tagResult: string) => {
         const chosenTag = tagResult ? tagResult.trim() : '';
         setIsStarredFilterActive(false);
+        setIsPriorityFilterActive(false);
         setSelectedTag(chosenTag || null);
         setSearchQuery(chosenTag);
         setShowSuggestions(false);
@@ -1689,6 +1817,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     setSearchQuery('');
     setSelectedTag(null);
     setIsStarredFilterActive(false);
+    setIsPriorityFilterActive(false);
     setShowSuggestions(false);
     saveSearchState('', null, false);
     searchInputRef.current?.focus();
@@ -1735,6 +1864,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     Haptics.selectionAsync();
     setSelectedTag(null);
     setIsStarredFilterActive(false);
+    setIsPriorityFilterActive(false);
     setSearchQuery(targetName);
     setShowSuggestions(false);
     saveSearchState(targetName, null, false);
@@ -1814,6 +1944,7 @@ export default function ContactsScreen({ navigation, route }: any) {
           onTagPress={handleTagPress}
           onCopyPhone={handleCopyPhone}
           onToggleStar={handleToggleStar}
+          onTogglePriorityStar={handleTogglePriorityStar}
           onFollowupBellPress={handleFollowupBellPress}
           onSwipeFollowupPress={handleSwipeFollowupPress}
           onLinkedBadgePress={handleLinkedBadgeSinglePress}
@@ -1844,6 +1975,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       handleTagPress,
       handleCopyPhone,
       handleToggleStar,
+      handleTogglePriorityStar,
       handleFollowupBellPress,
       handleSwipeFollowupPress,
       handleLinkedBadgeSinglePress,
@@ -1853,7 +1985,7 @@ export default function ContactsScreen({ navigation, route }: any) {
   );
 
   const ListHeader = useMemo(() => {
-    const isAllActive = selectedTag === null && !isStarredFilterActive && searchQuery === '';
+    const isAllActive = selectedTag === null && !isStarredFilterActive && !isPriorityFilterActive && searchQuery === '';
 
     return (
       <View style={styles.scrollableHeaderContainer}>
@@ -1881,6 +2013,9 @@ export default function ContactsScreen({ navigation, route }: any) {
               if (isStarredFilterActive) {
                 setIsStarredFilterActive(false);
               }
+              if (isPriorityFilterActive) {
+                setIsPriorityFilterActive(false);
+              }
             }}
             autoCorrect={false}
             clearButtonMode="never"
@@ -1895,7 +2030,6 @@ export default function ContactsScreen({ navigation, route }: any) {
           </TouchableOpacity>
         </View>
 
-        {/* Quick WhatsApp Banner when searching an unknown pasted number */}
         {sanitizedSearchPhone && filteredContacts.length === 0 && (
           <TouchableOpacity
             style={styles.quickWhatsAppBanner}
@@ -1961,7 +2095,6 @@ export default function ContactsScreen({ navigation, route }: any) {
               </View>
             </TouchableOpacity>
 
-            {/* Permanent Default Starred Tag Badge */}
             <TouchableOpacity
               style={[
                 styles.tagBadge,
@@ -2000,7 +2133,46 @@ export default function ContactsScreen({ navigation, route }: any) {
               </View>
             </TouchableOpacity>
 
-            {/* Permanent Default Follow-ups Tag Badge */}
+            {totalPriorityCount > 0 && (
+              <TouchableOpacity
+                style={[
+                  styles.tagBadge,
+                  styles.priorityTagBadge,
+                  isPriorityFilterActive && styles.priorityTagBadgeActive,
+                ]}
+                onPress={handleTogglePriorityTag}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="star" size={12} color={isPriorityFilterActive ? '#FFFFFF' : '#0284C7'} />
+                <Text
+                  style={[
+                    styles.tagBadgeText,
+                    styles.priorityTagText,
+                    isPriorityFilterActive && styles.tagBadgeTextActive,
+                  ]}
+                >
+                  Priority
+                </Text>
+                <View
+                  style={[
+                    styles.countBubble,
+                    styles.priorityCountBubble,
+                    isPriorityFilterActive && styles.priorityCountBubbleActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.badgeCount,
+                      styles.priorityBadgeCount,
+                      isPriorityFilterActive && styles.badgeCountActive,
+                    ]}
+                  >
+                    {totalPriorityCount}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
             <TouchableOpacity
               style={[styles.tagBadge, styles.followupsTagBadge]}
               onPress={() => {
@@ -2057,7 +2229,9 @@ export default function ContactsScreen({ navigation, route }: any) {
     searchQuery,
     selectedTag,
     isStarredFilterActive,
+    isPriorityFilterActive,
     totalStarredCount,
+    totalPriorityCount,
     activeFollowups.length,
     pinnedTags,
     linkedPeopleMap,
@@ -2069,6 +2243,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     openManageTagsModal,
     handleTagPress,
     handleToggleStarredTag,
+    handleTogglePriorityTag,
     handleSelectSuggestion,
     closeActiveSwipeable,
     navigation,
@@ -2110,6 +2285,8 @@ export default function ContactsScreen({ navigation, route }: any) {
     let filterLabel = '';
     if (isStarredFilterActive) {
       filterLabel = 'Starred';
+    } else if (isPriorityFilterActive) {
+      filterLabel = 'Priority';
     } else if (selectedTag) {
       filterLabel = `Filter: "${selectedTag}"`;
     } else if (searchQuery) {
@@ -2147,6 +2324,7 @@ export default function ContactsScreen({ navigation, route }: any) {
     selectedContactIds.size,
     filteredContacts.length,
     isStarredFilterActive,
+    isPriorityFilterActive,
     selectedTag,
     searchQuery,
     handleExitSelectionMode,
@@ -2160,7 +2338,7 @@ export default function ContactsScreen({ navigation, route }: any) {
   const renderEmptyComponent = useMemo(() => {
     if (loading) return null;
 
-    const hasFilter = Boolean(searchQuery || selectedTag || isStarredFilterActive);
+    const hasFilter = Boolean(searchQuery || selectedTag || isStarredFilterActive || isPriorityFilterActive);
 
     return (
       <View style={styles.emptyContainer}>
@@ -2193,7 +2371,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         )}
       </View>
     );
-  }, [loading, searchQuery, selectedTag, isStarredFilterActive, handleClearSearch, navigation]);
+  }, [loading, searchQuery, selectedTag, isStarredFilterActive, isPriorityFilterActive, handleClearSearch, navigation]);
 
   const quickTargetLinkedContacts = useMemo(() => {
     if (!quickContactTarget) return [];
@@ -2258,7 +2436,6 @@ export default function ContactsScreen({ navigation, route }: any) {
         />
       )}
 
-      {/* Floating Bottom Action Toolbar for Batch Mode */}
       {isSelectionMode && (
         <View style={styles.floatingActionBar}>
           <TouchableOpacity
@@ -2305,7 +2482,6 @@ export default function ContactsScreen({ navigation, route }: any) {
         </View>
       )}
 
-      {/* Quick View Linked Contact Modal with Click-Outside Backdrop Dismissal */}
       <Modal
         visible={quickContactModalVisible}
         transparent={true}
@@ -2437,7 +2613,6 @@ export default function ContactsScreen({ navigation, route }: any) {
         </Pressable>
       </Modal>
 
-      {/* Bulk Add Tags & Linked Contacts Modal */}
       <Modal
         visible={isTagModalVisible}
         transparent={true}
@@ -2630,7 +2805,6 @@ export default function ContactsScreen({ navigation, route }: any) {
         </Pressable>
       </Modal>
 
-      {/* Bulk Remove Selector Modal with Backdrop Dismissal */}
       <Modal
         visible={isRemoveTagModalVisible}
         transparent={true}
@@ -2641,26 +2815,38 @@ export default function ContactsScreen({ navigation, route }: any) {
           style={styles.modalOverlay}
           onPress={() => setIsRemoveTagModalVisible(false)}
         >
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Remove Tags / Linked Contacts</Text>
-            <Text style={styles.modalSubtitle}>
-              Tap the '✕' on any item to remove it from your {selectedContactIds.size} selected contact{selectedContactIds.size > 1 ? 's' : ''}.
-            </Text>
+          <View 
+            style={[styles.modalCard, { maxHeight: '85%', display: 'flex', flexDirection: 'column' }]} 
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={{ marginBottom: 8 }}>
+              <Text style={styles.modalTitle}>Remove Tags / Linked Contacts</Text>
+              <Text style={styles.modalSubtitle}>
+                Tap the '✕' on any item to remove it from your {selectedContactIds.size} selected contact{selectedContactIds.size > 1 ? 's' : ''}.
+              </Text>
+            </View>
 
-            <ScrollView contentContainerStyle={{ paddingVertical: 4 }} style={{ maxHeight: 260 }} showsVerticalScrollIndicator={true}>
+            <ScrollView 
+              contentContainerStyle={{ paddingVertical: 6, paddingRight: 6, flexGrow: 1 }} 
+              style={{ maxHeight: 260, flexShrink: 1, marginVertical: 4 }} 
+              showsVerticalScrollIndicator={true}
+              nestedScrollEnabled={true}
+              keyboardShouldPersistTaps="handled"
+              directionalLockEnabled={false}
+            >
               {draftTagsList.length === 0 && draftLinksList.length === 0 ? (
                 <Text style={styles.noDraftTagsText}>All items staged for removal.</Text>
               ) : (
-                <>
+                <View pointerEvents="box-none">
                   {draftTagsList.length > 0 && (
-                    <View style={styles.orderlySectionBlock}>
-                      <View style={styles.orderlySectionHeader}>
+                    <View style={styles.orderlySectionBlock} pointerEvents="box-none">
+                      <View style={styles.orderlySectionHeader} pointerEvents="none">
                         <Ionicons name="pricetag-outline" size={12} color="#475569" />
                         <Text style={styles.orderlySectionTitle}>Tags ({draftTagsList.length})</Text>
                       </View>
-                      <View style={styles.draftChipsContainer}>
+                      <View style={styles.draftChipsContainer} pointerEvents="box-none">
                         {draftTagsList.map((item) => (
-                          <View key={item.id} style={styles.draftChipStandard}>
+                          <View key={item.id} style={styles.draftChipStandard} pointerEvents="auto">
                             <Ionicons name="pricetag-outline" size={12} color="#2563EB" style={{ marginRight: 2 }} />
                             <Text style={styles.draftChipStandardText} numberOfLines={1}>{item.label}</Text>
                             <TouchableOpacity
@@ -2676,14 +2862,14 @@ export default function ContactsScreen({ navigation, route }: any) {
                   )}
 
                   {draftLinksList.length > 0 && (
-                    <View style={[styles.orderlySectionBlock, draftTagsList.length > 0 && { marginTop: 12 }]}>
-                      <View style={styles.orderlySectionHeader}>
+                    <View style={[styles.orderlySectionBlock, draftTagsList.length > 0 && { marginTop: 12 }]} pointerEvents="box-none">
+                      <View style={styles.orderlySectionHeader} pointerEvents="none">
                         <Ionicons name="people-outline" size={12} color="#475569" />
                         <Text style={styles.orderlySectionTitle}>Linked Contacts ({draftLinksList.length})</Text>
                       </View>
-                      <View style={styles.draftChipsContainer}>
+                      <View style={styles.draftChipsContainer} pointerEvents="box-none">
                         {draftLinksList.map((item) => (
-                          <View key={item.id} style={styles.draftChipStandard}>
+                          <View key={item.id} style={styles.draftChipStandard} pointerEvents="auto">
                             <Ionicons name="link" size={12} color="#2563EB" style={{ marginRight: 2 }} />
                             <Text style={styles.draftChipStandardText} numberOfLines={1}>{item.label}</Text>
                             <TouchableOpacity
@@ -2697,11 +2883,11 @@ export default function ContactsScreen({ navigation, route }: any) {
                       </View>
                     </View>
                   )}
-                </>
+                </View>
               )}
             </ScrollView>
 
-            <View style={[styles.modalButtonsRow, { marginTop: 16 }]}>
+            <View style={[styles.modalButtonsRow, { marginTop: 12 }]}>
               <TouchableOpacity
                 style={[styles.modalBtn, styles.modalCancelBtn]}
                 onPress={() => setIsRemoveTagModalVisible(false)}
@@ -2722,7 +2908,7 @@ export default function ContactsScreen({ navigation, route }: any) {
                 <Text style={styles.modalApplyText}>Update Changes</Text>
               </TouchableOpacity>
             </View>
-          </Pressable>
+          </View>
         </Pressable>
       </Modal>
 
@@ -2899,6 +3085,27 @@ const styles = StyleSheet.create({
   },
   starredTagText: {
     color: '#92400E',
+  },
+  priorityTagBadge: {
+    borderColor: '#BAE6FD',
+    backgroundColor: '#F0F9FF',
+  },
+  priorityTagBadgeActive: {
+    backgroundColor: '#0284C7',
+    borderColor: '#0284C7',
+  },
+  priorityTagText: {
+    color: '#0369A1',
+    fontWeight: '700',
+  },
+  priorityCountBubble: {
+    backgroundColor: '#E0F2FE',
+  },
+  priorityCountBubbleActive: {
+    backgroundColor: '#0369A1',
+  },
+  priorityBadgeCount: {
+    color: '#0369A1',
   },
   followupsTagBadge: {
     borderColor: '#A7F3D0',
@@ -3212,7 +3419,7 @@ const styles = StyleSheet.create({
   floatingActionLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#1E293B',
+    color: '#0F172A',
   },
   floatingActionDivider: {
     width: 1,

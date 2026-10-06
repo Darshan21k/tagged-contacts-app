@@ -6,7 +6,7 @@ You are an expert React Native & Expo developer working on the ContactNow Contac
 - **Framework & Runtime**: Expo SDK, React Native, TypeScript
 - **Database & Backend**: Supabase (PostgreSQL)
   - `Userprofile` (`Name`, `Phonenumber`, `Mail_id`, `Login_Access`, `User_type`)
-  - `Contacts_Table` (`id`, `Name`, `Phonenumber`, `Tags`, `OtherDetails`, `Userphonenumber`, `is_starred`, `LinkedContactPhone`, `created_at`)
+  - `Contacts_Table` (`id`, `Name`, `Phonenumber`, `Tags`, `OtherDetails`, `Userphonenumber`, `is_starred`, `LinkedContactPhone`, `created_at`, `is_search_priority`)
   - `PinnedTags` (`Tagname`, `Userphonenumber`, `Pinned`)
   - `Followups_Table` (`id`, `Userphonenumber`, `type`, `contact_id`, `linked_contact_ids`, `target_tags`, `completed_contact_ids`, `note`, `due_date`, `due_time`, `is_completed`, `completed_at`, `created_at`, `updated_at`)
 - **Storage & Plugins**: `AsyncStorage`, `expo-status-bar`, `expo-clipboard`, `expo-haptics`, `expo-linking`, `Ionicons`, `react-native-gesture-handler`, `react-native-safe-area-context`

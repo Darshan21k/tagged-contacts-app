@@ -230,6 +230,26 @@ export default function HomeScreen({ navigation }: any) {
       });
   }, [tagInput, allContacts, phone, linkedContacts]);
 
+  // Real-time phone duplication check after reaching 10 digits
+  const handlePhoneChange = (text: string) => {
+    const cleanDigits = text.replace(/\D/g, '').slice(0, 10);
+    setPhone(cleanDigits);
+
+    if (cleanDigits.length === 10) {
+      const isDuplicate = allContacts.some(
+        (contact) => (contact.Phonenumber || '').replace(/\D/g, '').slice(-10) === cleanDigits
+      );
+
+      if (isDuplicate) {
+        Alert.alert(
+          'Duplicate Number',
+          'This phone number is already saved in your contacts.',
+          [{ text: 'OK' }]
+        );
+      }
+    }
+  };
+
   const handlePickDeviceContact = async () => {
     try {
       const { status } = await Contacts.requestPermissionsAsync();
@@ -248,7 +268,7 @@ export default function HomeScreen({ navigation }: any) {
           const rawNumber = contact.phoneNumbers[0].number || '';
           const digitsOnly = rawNumber.replace(/\D/g, '');
           const clean10 = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
-          setPhone(clean10);
+          handlePhoneChange(clean10);
         }
       }
     } catch (err: any) {
@@ -467,7 +487,7 @@ export default function HomeScreen({ navigation }: any) {
             keyboardType="numeric"
             maxLength={10}
             value={phone}
-            onChangeText={setPhone}
+            onChangeText={handlePhoneChange}
           />
 
           {/* Tags & Suggestions Section */}

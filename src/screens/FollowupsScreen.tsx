@@ -35,6 +35,37 @@ const formatToDDMMYYYY = (isoDate: string): string => {
   return `${parts[2]}-${parts[1]}-${parts[0]}`;
 };
 
+const formatCreatedDate = (isoString?: string): string => {
+  if (!isoString) return '';
+  try {
+    const dateObj = new Date(isoString);
+    if (isNaN(dateObj.getTime())) return isoString;
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const year = dateObj.getFullYear();
+    return `${day}-${month}-${year}`;
+  } catch {
+    return isoString;
+  }
+};
+
+const getOverdueDaysText = (dueDateStr: string, todayStr: string): string => {
+  try {
+    const [y1, m1, d1] = dueDateStr.split('-').map(Number);
+    const [y2, m2, d2] = todayStr.split('-').map(Number);
+    const dueTime = new Date(y1, m1 - 1, d1).getTime();
+    const todayTime = new Date(y2, m2 - 1, d2).getTime();
+    
+    const diffTime = todayTime - dueTime;
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays <= 1) return '1 day overdue';
+    return `${diffDays} days overdue`;
+  } catch {
+    return 'Overdue';
+  }
+};
+
 const HOURS = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
 const MINUTES = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0'));
 const ITEM_HEIGHT = 32;
@@ -1299,7 +1330,11 @@ export default function FollowupsScreen({ route, navigation }: any) {
                         isToday && styles.dueBadgeTextToday,
                       ]}
                     >
-                      {isOverdue ? 'Overdue' : isToday ? 'Today' : formatToDDMMYYYY(item.due_date)}
+                      {isOverdue 
+                        ? getOverdueDaysText(item.due_date, todayStr) 
+                        : isToday 
+                        ? 'Today' 
+                        : formatToDDMMYYYY(item.due_date)}
                       {item.due_time ? ` · ${item.due_time}` : ''}
                     </Text>
                   </View>
@@ -1316,6 +1351,12 @@ export default function FollowupsScreen({ route, navigation }: any) {
                 <TouchableOpacity activeOpacity={0.9} onPress={() => handleOpenEdit(item)}>
                   {renderFormattedNotePreview(item.note)}
                 </TouchableOpacity>
+
+                {item.created_at && (
+                  <Text style={styles.createdDateSubtext}>
+                    Created on {formatCreatedDate(item.created_at)}
+                  </Text>
+                )}
 
                 {(isTask || targetContacts.length > 0) && (
                   <View style={styles.taskCohortContainer}>
@@ -1544,11 +1585,14 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                 <View style={{ flex: 1 }}>
                                   <Text style={styles.completedTypeSub}>
                                     {cItem.type === 'task'
-                                      ? '🏷️ GROUP TASK'
+                                      ? '🏷️️ GROUP TASK'
                                       : `👤 ${cContact?.Name || 'Contact'}`}
                                   </Text>
                                   <Text style={styles.completedNoteText} numberOfLines={2}>
                                     {cItem.note}
+                                  </Text>
+                                  <Text style={styles.completedDatesSubtext}>
+                                    Created: {formatCreatedDate(cItem.created_at)} {cItem.completed_at ? `· Completed: ${formatCreatedDate(cItem.completed_at)}` : ''}
                                   </Text>
                                 </View>
 
@@ -1724,6 +1768,14 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   )}
                 </View>
 
+                {viewingItem?.created_at && (
+                  <View style={{ marginTop: 6, marginBottom: 4 }}>
+                    <Text style={{ fontSize: 11, color: '#94A3B8', fontWeight: '500' }}>
+                      Created on: {formatCreatedDate(viewingItem.created_at)} {viewingItem.completed_at ? `· Completed on: ${formatCreatedDate(viewingItem.completed_at)}` : ''}
+                    </Text>
+                  </View>
+                )}
+
                 <View style={styles.modalBtnRow}>
                   <TouchableOpacity
                     style={[styles.modalBtn, styles.modalCancelBtn, { flex: 1 }]}
@@ -1811,7 +1863,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   </TouchableOpacity>
                 </View>
 
-                {/* SINGLE PERSON TAB ONLY: Display selected contact banner */}
                 {createType === 'contact' && selectedContact && (
                   <View style={styles.selectedContactBanner}>
                     <View style={styles.contactBannerLeft}>
@@ -1827,7 +1878,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   </View>
                 )}
 
-                {/* SHARED: Linked Contacts card showing Primary Tag */}
                 {boundContacts.length > 0 && (
                   <View style={styles.contactSelectorSection}>
                     <Text style={styles.selectorLabel}>
@@ -1880,7 +1930,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   </View>
                 )}
 
-                {/* SHARED: Linked Tags card */}
                 {boundTags.length > 0 && (
                   <View style={styles.contactSelectorSection}>
                     <Text style={styles.selectorLabel}>Linked Tags ({boundTags.length}):</Text>
@@ -1938,7 +1987,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   )}
                 </View>
 
-                {/* Clean Note Input Box */}
                 <View style={styles.noteBoxWrapper}>
                   <TextInput
                     ref={noteInputRef}
@@ -2483,6 +2531,17 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: 6,
     color: '#0F172A',
+  },
+  createdDateSubtext: {
+    fontSize: 10.5,
+    color: '#94A3B8',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  completedDatesSubtext: {
+    fontSize: 10.5,
+    color: '#94A3B8',
+    marginTop: 4,
   },
   taskCohortContainer: {
     backgroundColor: '#F8FAFC',
