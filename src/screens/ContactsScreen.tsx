@@ -25,6 +25,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { supabase } from '../services/supabase';
 import { Contact, FollowupItem } from '../types';
+import ContactCardSkeleton from '../components/ContactCardSkeleton'; 
+import OnboardingModal from '../components/OnboardingModal';
+
 
 interface ResolvedLinkBadge {
   name: string;
@@ -248,13 +251,15 @@ const ContactCard = React.memo(
               color="#FFFFFF"
             />
             <Text style={styles.swipeActionText}>
-              {hasActiveFollowup ? 'Follow-up' : 'New Reminder'}
+              {hasActiveFollowup ? 'Follow-up' : 'New Follow-up'}
             </Text>
           </TouchableOpacity>
         </Animated.View>
       );
     };
 
+    
+  
     return (
       <View style={styles.swipeableWrapper}>
         <Swipeable
@@ -470,6 +475,23 @@ export default function ContactsScreen({ navigation, route }: any) {
   const [isStarredFilterActive, setIsStarredFilterActive] = useState<boolean>(false);
   const [isPriorityFilterActive, setIsPriorityFilterActive] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  
+
+useFocusEffect(
+  useCallback(() => {
+    (async () => {
+      try {
+        const hasSeen = await AsyncStorage.getItem('@has_seen_onboarding');
+        if (!hasSeen) {
+          setShowOnboarding(true);
+        }
+      } catch (err) {
+        console.warn('Failed to load onboarding state:', err);
+      }
+    })();
+  }, [])
+);
 
   const activeTerms = useMemo(() => {
     const q = (searchQuery || '').trim().toLowerCase();
@@ -1694,6 +1716,7 @@ export default function ContactsScreen({ navigation, route }: any) {
   }, [closeActiveSwipeable, saveSearchState]);
 
   const handleTagPress = useCallback((tag: string | null) => {
+    Haptics.selectionAsync(); // Adds subtle tactile feedback on tap
     closeActiveSwipeable();
     try {
       sectionListRef.current?.scrollToLocation({
@@ -1733,6 +1756,7 @@ export default function ContactsScreen({ navigation, route }: any) {
   }, [closeActiveSwipeable, saveSearchState]);
 
   const handleToggleStarredTag = useCallback(() => {
+   Haptics.selectionAsync();
     closeActiveSwipeable();
     try {
       sectionListRef.current?.scrollToLocation({
@@ -1757,6 +1781,7 @@ export default function ContactsScreen({ navigation, route }: any) {
   }, [closeActiveSwipeable, saveSearchState]);
 
   const handleTogglePriorityTag = useCallback(() => {
+    Haptics.selectionAsync();
     closeActiveSwipeable();
     try {
       sectionListRef.current?.scrollToLocation({
@@ -2066,11 +2091,114 @@ export default function ContactsScreen({ navigation, route }: any) {
           </View>
         )}
 
+        {/* FIXED PERMANENT CHIPS BAR (STARRED, PRIORITY, FOLLOW-UPS) */}
+        <View style={styles.fixedChipsBarContainer}>
+          <TouchableOpacity
+            style={[
+              styles.tagBadge,
+              styles.starredTagBadge,
+              isStarredFilterActive && styles.starredTagBadgeActive,
+            ]}
+            onPress={handleToggleStarredTag}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="star" size={12} color={isStarredFilterActive ? '#FFFFFF' : '#D97706'} />
+            <Text
+              style={[
+                styles.tagBadgeText,
+                styles.starredTagText,
+                isStarredFilterActive && styles.tagBadgeTextActive,
+              ]}
+            >
+              Starred
+            </Text>
+            <View
+              style={[
+                styles.countBubble,
+                styles.starredCountBubble,
+                isStarredFilterActive && styles.starredCountBubbleActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.badgeCount,
+                  styles.starredBadgeCount,
+                  isStarredFilterActive && styles.badgeCountActive,
+                ]}
+              >
+                {totalStarredCount}
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          {totalPriorityCount > 0 && (
+            <TouchableOpacity
+              style={[
+                styles.tagBadge,
+                styles.priorityTagBadge,
+                isPriorityFilterActive && styles.priorityTagBadgeActive,
+              ]}
+              onPress={handleTogglePriorityTag}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="star" size={12} color={isPriorityFilterActive ? '#FFFFFF' : '#0284C7'} />
+              <Text
+                style={[
+                  styles.tagBadgeText,
+                  styles.priorityTagText,
+                  isPriorityFilterActive && styles.tagBadgeTextActive,
+                ]}
+              >
+                Priority
+              </Text>
+              <View
+                style={[
+                  styles.countBubble,
+                  styles.priorityCountBubble,
+                  isPriorityFilterActive && styles.priorityCountBubbleActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.badgeCount,
+                    styles.priorityBadgeCount,
+                    isPriorityFilterActive && styles.badgeCountActive,
+                  ]}
+                >
+                  {totalPriorityCount}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={[styles.tagBadge, styles.followupsTagBadge]}
+            onPress={() => {
+              Haptics.selectionAsync();
+              closeActiveSwipeable();
+              Haptics.selectionAsync().catch(() => {});
+              navigation.navigate('Followups', { userPhone });
+            }}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="notifications" size={12} color="#059669" />
+            <Text style={[styles.tagBadgeText, styles.followupsTagText]}>
+              Follow-ups
+            </Text>
+            <View style={[styles.countBubble, styles.followupsCountBubble]}>
+              <Text style={[styles.badgeCount, styles.followupsBadgeCount]}>
+                {activeFollowups.length}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* PINNED TAGS AREA (WITH "ALL" TAG INCLUDED) */}
         <View style={styles.tagsWindowCard}>
           <View style={styles.tagsWindowHeader}>
             <View style={styles.tagsTitleRow}>
               <Ionicons name="pin" size={14} color="#2563EB" />
-              <Text style={styles.tagsTitleText}>Tags</Text>
+              <Text style={styles.tagsTitleText}>Pinned Tags</Text>
             </View>
             <TouchableOpacity
               style={styles.settingsIconBtn}
@@ -2091,104 +2219,6 @@ export default function ContactsScreen({ navigation, route }: any) {
               <View style={[styles.countBubble, isAllActive && styles.countBubbleActive]}>
                 <Text style={[styles.badgeCount, isAllActive && styles.badgeCountActive]}>
                   {allContacts.length}
-                </Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.tagBadge,
-                styles.starredTagBadge,
-                isStarredFilterActive && styles.starredTagBadgeActive,
-              ]}
-              onPress={handleToggleStarredTag}
-              activeOpacity={0.75}
-            >
-              <Ionicons name="star" size={12} color={isStarredFilterActive ? '#FFFFFF' : '#D97706'} />
-              <Text
-                style={[
-                  styles.tagBadgeText,
-                  styles.starredTagText,
-                  isStarredFilterActive && styles.tagBadgeTextActive,
-                ]}
-              >
-                Starred
-              </Text>
-              <View
-                style={[
-                  styles.countBubble,
-                  styles.starredCountBubble,
-                  isStarredFilterActive && styles.starredCountBubbleActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.badgeCount,
-                    styles.starredBadgeCount,
-                    isStarredFilterActive && styles.badgeCountActive,
-                  ]}
-                >
-                  {totalStarredCount}
-                </Text>
-              </View>
-            </TouchableOpacity>
-
-            {totalPriorityCount > 0 && (
-              <TouchableOpacity
-                style={[
-                  styles.tagBadge,
-                  styles.priorityTagBadge,
-                  isPriorityFilterActive && styles.priorityTagBadgeActive,
-                ]}
-                onPress={handleTogglePriorityTag}
-                activeOpacity={0.75}
-              >
-                <Ionicons name="star" size={12} color={isPriorityFilterActive ? '#FFFFFF' : '#0284C7'} />
-                <Text
-                  style={[
-                    styles.tagBadgeText,
-                    styles.priorityTagText,
-                    isPriorityFilterActive && styles.tagBadgeTextActive,
-                  ]}
-                >
-                  Priority
-                </Text>
-                <View
-                  style={[
-                    styles.countBubble,
-                    styles.priorityCountBubble,
-                    isPriorityFilterActive && styles.priorityCountBubbleActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.badgeCount,
-                      styles.priorityBadgeCount,
-                      isPriorityFilterActive && styles.badgeCountActive,
-                    ]}
-                  >
-                    {totalPriorityCount}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={[styles.tagBadge, styles.followupsTagBadge]}
-              onPress={() => {
-                closeActiveSwipeable();
-                Haptics.selectionAsync().catch(() => {});
-                navigation.navigate('Followups', { userPhone });
-              }}
-              activeOpacity={0.75}
-            >
-              <Ionicons name="notifications" size={12} color="#059669" />
-              <Text style={[styles.tagBadgeText, styles.followupsTagText]}>
-                Follow-ups
-              </Text>
-              <View style={[styles.countBubble, styles.followupsCountBubble]}>
-                <Text style={[styles.badgeCount, styles.followupsBadgeCount]}>
-                  {activeFollowups.length}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -2403,7 +2433,12 @@ export default function ContactsScreen({ navigation, route }: any) {
   return (
     <View style={styles.container}>
       {loading && allContacts.length === 0 ? (
-        <ActivityIndicator size="large" color="#2563EB" style={{ marginTop: 60 }} />
+        <View style={{ paddingTop: 8 }}>
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((item) => (
+            <ContactCardSkeleton key={item} />
+          ))}
+          
+        </View>
       ) : (
         <SectionList
           ref={sectionListRef}
@@ -2912,6 +2947,9 @@ export default function ContactsScreen({ navigation, route }: any) {
         </Pressable>
       </Modal>
 
+{showOnboarding && (
+        <OnboardingModal onComplete={() => setShowOnboarding(false)} />
+      )}
       {toastMessage && (
         <Animated.View style={[styles.toastContainer, { opacity: toastOpacity }]}>
           <Ionicons name="checkmark-circle" size={16} color="#10B981" />
@@ -3011,6 +3049,15 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     fontWeight: '700',
   },
+  fixedChipsBarContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginHorizontal: 16,
+    marginBottom: 6,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   tagsWindowCard: {
     backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
@@ -3051,13 +3098,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   tagBadge: {
+    
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F8FAFC',
     paddingLeft: 10,
     paddingRight: 6,
     paddingVertical: 4.5,
-    borderRadius: 14,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: '#CBD5E1',
     gap: 5,
@@ -3078,6 +3126,8 @@ const styles = StyleSheet.create({
   starredTagBadge: {
     borderColor: '#FDE68A',
     backgroundColor: '#FFFBEB',
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   starredTagBadgeActive: {
     backgroundColor: '#D97706',
@@ -3089,6 +3139,8 @@ const styles = StyleSheet.create({
   priorityTagBadge: {
     borderColor: '#BAE6FD',
     backgroundColor: '#F0F9FF',
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   priorityTagBadgeActive: {
     backgroundColor: '#0284C7',
@@ -3110,6 +3162,8 @@ const styles = StyleSheet.create({
   followupsTagBadge: {
     borderColor: '#A7F3D0',
     backgroundColor: '#ECFDF5',
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   followupsTagText: {
     color: '#065F46',

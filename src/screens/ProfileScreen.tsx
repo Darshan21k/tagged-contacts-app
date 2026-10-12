@@ -13,6 +13,7 @@ import {
   ScrollView,
   Switch,
   Animated,
+  Linking,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -210,6 +211,38 @@ export default function ProfileScreen({ navigation }: any) {
     );
   };
 
+  const handleSupportEmail = async (subjectType: string) => {
+    const email = 'contactnow.support@gmail.com';
+    const subject = encodeURIComponent(`ContactNow ${subjectType} - Inquiry`);
+    const body = encodeURIComponent(
+      `Hi ContactNow Support Team,\n\nI am writing regarding a ${subjectType.toLowerCase()}:\n\n`
+    );
+    const url = `mailto:${email}?subject=${subject}&body=${body}`;
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('Error', 'No email client found on this device.');
+      }
+    } catch (error) {
+      console.error('Failed to open email client:', error);
+    }
+  };
+
+  // Handler to reset onboarding storage flag so the tour can be viewed again
+  const handleViewAppTour = async () => {
+    try {
+      await AsyncStorage.removeItem('@has_seen_onboarding'); 
+      showToast('Restarting App tour...');
+      
+      navigation.navigate('Contacts'); 
+    } catch (err) {
+      Alert.alert('Error', 'Could not reset the app tour.');
+    }
+  };
+
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
       { text: 'Cancel', style: 'cancel' },
@@ -342,6 +375,68 @@ export default function ProfileScreen({ navigation }: any) {
               thumbColor={isLockEnabled ? '#2563EB' : '#FFFFFF'}
             />
           </View>
+        </View>
+
+        {/* App Feature Tour Card */}
+        <View style={styles.detailsCard}>
+          <Text style={styles.sectionHeader}>App Guide</Text>
+
+          <TouchableOpacity style={styles.supportRow} onPress={handleViewAppTour}>
+            <View style={styles.iconBox}>
+              <Ionicons name="compass-outline" size={18} color="#2563EB" />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <Text style={styles.securityTitle}>View App Tour</Text>
+              <Text style={styles.securitySubtitle}>Take a guided walkthrough of all features</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Help & Support Card */}
+        <View style={styles.detailsCard}>
+          <Text style={styles.sectionHeader}>Help & Support</Text>
+
+          <TouchableOpacity style={styles.supportRow} onPress={() => handleSupportEmail('Feedback')}>
+            <View style={styles.iconBox}>
+              <Ionicons name="bulb-outline" size={18} color="#D97706" />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <Text style={styles.securityTitle}>Send Feedback</Text>
+              <Text style={styles.securitySubtitle}>Share your thoughts or suggestions</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity style={styles.supportRow} onPress={() => handleSupportEmail('Bug Report')}>
+            <View style={styles.iconBox}>
+              <Ionicons name="bug-outline" size={18} color="#DC2626" />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <Text style={styles.securityTitle}>Report an Issue</Text>
+              <Text style={styles.securitySubtitle}>Let us know if something went wrong</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity style={styles.supportRow} onPress={() => handleSupportEmail('Business Enquiry')}>
+            <View style={styles.iconBox}>
+              <Ionicons name="briefcase-outline" size={18} color="#2563EB" />
+            </View>
+            <View style={styles.infoTextContainer}>
+              <Text style={styles.securityTitle}>Business Enquiry</Text>
+              <Text style={styles.securitySubtitle}>Collaborations and partnerships</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+          </TouchableOpacity>
+
+          <Text style={styles.supportDirectEmail}>
+           Get in Touch: contactnow.support@gmail.com
+          </Text>
         </View>
 
         {isAdmin && (
@@ -527,6 +622,7 @@ const styles = StyleSheet.create({
   },
   editText: { fontSize: 13, fontWeight: '700', color: '#2563EB' },
   infoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+  supportRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
   iconBox: {
     width: 36,
     height: 36,
@@ -541,6 +637,7 @@ const styles = StyleSheet.create({
   infoValue: { fontSize: 14, fontWeight: '600', color: '#1E293B', marginTop: 2 },
   securityTitle: { fontSize: 14, fontWeight: '600', color: '#0F172A' },
   securitySubtitle: { fontSize: 12, color: '#64748B', marginTop: 2 },
+  supportDirectEmail: { fontSize: 12, color: '#64748B', textAlign: 'center', marginTop: 12 },
   divider: { height: 1, backgroundColor: '#F1F5F9', marginVertical: 6 },
   adminButton: {
     flexDirection: 'row',

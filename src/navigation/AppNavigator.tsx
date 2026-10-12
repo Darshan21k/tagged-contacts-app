@@ -15,6 +15,7 @@ import AdminPage from '../screens/AdminPage';
 import TagsPopupPage from '../screens/TagsPopupPage';
 import RecentActivityScreen from '../screens/RecentActivityScreen';
 import FollowupsScreen from '../screens/FollowupsScreen';
+import OfflineBanner from '../components/OfflineBanner';
 
 import HomeScreen from '../screens/HomeScreen';
 import ContactsScreen from '../screens/ContactsScreen';
@@ -112,55 +113,58 @@ export default function AppNavigator() {
   const insets = useSafeAreaInsets();
 
   return (
-    <Stack.Navigator initialRouteName="AuthLoading">
-      <Stack.Screen name="AuthLoading" component={AuthLoadingScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Login" component={LoginPage} options={{ headerShown: false }} />
-      <Stack.Screen name="Registration" component={RegistrationPage} options={{ title: 'Register' }} />
-      <Stack.Screen name="AccessBlocked" component={AccessBlockedPage} options={{ headerShown: false }} />
-      <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
-      <Stack.Screen name="EditContact" component={EditContactPage} options={{ title: 'Edit Contact' }} />
-      <Stack.Screen name="RecentActivity" component={RecentActivityScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Followups" component={FollowupsScreen} options={{ headerShown: false }} />
-      <Stack.Screen
-        name="PopTags"
-        component={PopTagsModal}
-        options={{
-          headerShown: false,
-          presentation: 'transparentModal',
-          animation: 'fade',
-        }}
-      />
-      <Stack.Screen
-        name="ManageTags"
-        component={TagsPopupPage}
-        options={{
-          headerShown: false,
-          presentation: 'transparentModal',
-          animation: 'fade',
-        }}
-      />
-      <Stack.Screen 
-        name="Admin" 
-        component={AdminPage} 
-        options={({ navigation }) => ({
-          header: () => (
-            <View style={[styles.compactHeaderContainer, { paddingTop: insets.top + 6 }]}>
-              <View style={styles.compactHeaderRow}>
-                <TouchableOpacity
-                  onPress={() => navigation.goBack()}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  style={{ marginRight: 6 }}
-                >
-                  <Ionicons name="chevron-back" size={24} color="#0F172A" />
-                </TouchableOpacity>
-                <Text style={styles.compactHeaderTitle}>Admin</Text>
-                <View style={styles.badgeIndicator} />
+    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+      <OfflineBanner />
+      <Stack.Navigator initialRouteName="AuthLoading">
+        <Stack.Screen name="AuthLoading" component={AuthLoadingScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Login" component={LoginPage} options={{ headerShown: false }} />
+        <Stack.Screen name="Registration" component={RegistrationPage} options={{ title: 'Register' }} />
+        <Stack.Screen name="AccessBlocked" component={AccessBlockedPage} options={{ headerShown: false }} />
+        <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
+        <Stack.Screen name="EditContact" component={EditContactPage} options={{ title: 'Edit Contact' }} />
+        <Stack.Screen name="RecentActivity" component={RecentActivityScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Followups" component={FollowupsScreen} options={{ headerShown: false }} />
+        <Stack.Screen
+          name="PopTags"
+          component={PopTagsModal}
+          options={{
+            headerShown: false,
+            presentation: 'transparentModal',
+            animation: 'fade',
+          }}
+        />
+        <Stack.Screen
+          name="ManageTags"
+          component={TagsPopupPage}
+          options={{
+            headerShown: false,
+            presentation: 'transparentModal',
+            animation: 'fade',
+          }}
+        />
+        <Stack.Screen 
+          name="Admin" 
+          component={AdminPage} 
+          options={({ navigation }) => ({
+            header: () => (
+              <View style={[styles.compactHeaderContainer, { paddingTop: insets.top + 6 }]}>
+                <View style={styles.compactHeaderRow}>
+                  <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={{ marginRight: 6 }}
+                  >
+                    <Ionicons name="chevron-back" size={24} color="#0F172A" />
+                  </TouchableOpacity>
+                  <Text style={styles.compactHeaderTitle}>Admin</Text>
+                  <View style={styles.badgeIndicator} />
+                </View>
               </View>
-            </View>
-          ),
-        })} 
-      />
-    </Stack.Navigator>
+            ),
+          })} 
+        />
+      </Stack.Navigator>
+    </View>
   );
 }
 

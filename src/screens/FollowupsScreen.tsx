@@ -1585,7 +1585,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                 <View style={{ flex: 1 }}>
                                   <Text style={styles.completedTypeSub}>
                                     {cItem.type === 'task'
-                                      ? '🏷️️ GROUP TASK'
+                                      ? '🏷 GROUP TASK'
                                       : `👤 ${cContact?.Name || 'Contact'}`}
                                   </Text>
                                   <Text style={styles.completedNoteText} numberOfLines={2}>
@@ -1790,7 +1790,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
         </Pressable>
       </Modal>
 
-      {/* Create / Edit Follow-up Modal */}
+     {/* Create / Edit Follow-up Modal */}
       <Modal
         visible={isCreateModalVisible}
         transparent={true}
@@ -1804,22 +1804,25 @@ export default function FollowupsScreen({ route, navigation }: any) {
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
             <KeyboardAvoidingView
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={{ width: '100%' }}
+              style={{ flex: 1, width: '100%' }}
             >
+              {/* FIXED HEADER */}
+              <View style={styles.modalHeaderRow}>
+                <Text style={styles.modalTitle}>
+                  {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
+                </Text>
+                <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
+                  <Ionicons name="close" size={22} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              {/* SCROLLABLE MIDDLE SECTION */}
               <ScrollView
                 keyboardShouldPersistTaps="always"
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+                contentContainerStyle={{ paddingBottom: 16 }}
+                style={{ flex: 1 }}
               >
-                <View style={styles.modalHeaderRow}>
-                  <Text style={styles.modalTitle}>
-                    {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
-                  </Text>
-                  <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
-                    <Ionicons name="close" size={22} color="#64748B" />
-                  </TouchableOpacity>
-                </View>
-
                 <View style={styles.typeSelectorRow}>
                   <TouchableOpacity
                     style={[styles.typeBtn, createType === 'contact' && styles.typeBtnActive]}
@@ -2205,24 +2208,25 @@ export default function FollowupsScreen({ route, navigation }: any) {
                     </View>
                   </View>
                 )}
-
-                <View style={styles.modalBtnRow}>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalCancelBtn]}
-                    onPress={() => setIsCreateModalVisible(false)}
-                  >
-                    <Text style={styles.modalCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalSubmitBtn]}
-                    onPress={handleSaveFollowup}
-                  >
-                    <Text style={styles.modalSubmitText}>
-                      {editingItem ? 'Update Follow-up' : 'Save Follow-up'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
               </ScrollView>
+
+              {/* FIXED FOOTER BUTTONS WITH SAFE AREA PADDING */}
+              <View style={[styles.modalBtnRow, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, styles.modalCancelBtn]}
+                  onPress={() => setIsCreateModalVisible(false)}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalBtn, styles.modalSubmitBtn]}
+                  onPress={handleSaveFollowup}
+                >
+                  <Text style={styles.modalSubmitText}>
+                    {editingItem ? 'Update Follow-up' : 'Save Follow-up'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </KeyboardAvoidingView>
           </Pressable>
         </Pressable>
@@ -2917,8 +2921,10 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     padding: 20,
-    maxHeight: '90%',
+    width: '100%',
+    height: '80%',
     elevation: 10,
+    flexShrink: 1,
   },
   modalHeaderRow: {
     flexDirection: 'row',
