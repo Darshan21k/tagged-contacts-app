@@ -27,15 +27,26 @@ interface ContactItem {
   id: string | number;
   Name: string;
   Phonenumber: string;
+  Phonelabels?: string;
   Tags: string;
 }
+
+interface PhoneEntry {
+  number: string;
+  label: string;
+}
+
+const POPULAR_LABELS = ['Mobile', 'Work', 'Personal', 'WhatsApp', 'Home'];
 
 export default function EditContactPage({ route, navigation }: any) {
   const { id } = route.params;
   const insets = useSafeAreaInsets();
 
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [phoneEntries, setPhoneEntries] = useState<PhoneEntry[]>([
+    { number: '', label: 'Mobile' }
+  ]);
+  const [activeLabelIndex, setActiveLabelIndex] = useState<number | null>(null);
   const [tagsList, setTagsList] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [linkedContacts, setLinkedContacts] = useState<LinkedContactState[]>([]);
@@ -45,7 +56,7 @@ export default function EditContactPage({ route, navigation }: any) {
   const [userPhone, setUserPhone] = useState('9999999999');
   const [mostUsedTags, setMostUsedTags] = useState<string[]>([]);
   const [recentTags, setRecentTags] = useState<string[]>([]);
-  const [tagTab, setTagTab] = useState<'most' | 'recent'>('most');
+  const [tagTab, setTagTab] = useState<'recent' | 'most'>('recent');
   const [allAvailableTags, setAllAvailableTags] = useState<string[]>([]);
   const [allContacts, setAllContacts] = useState<ContactItem[]>([]);
   const [tagSectionY, setTagSectionY] = useState(0);
@@ -120,7 +131,7 @@ export default function EditContactPage({ route, navigation }: any) {
     try {
       const { data, error } = await supabase
         .from('Contacts_Table')
-        .select('id, Name, Phonenumber, Tags')
+        .select('id, Name, Phonenumber, Phonelabels, Tags')
         .eq('Userphonenumber', activePhone)
         .order('id', { ascending: false });
 
@@ -196,8 +207,20 @@ export default function EditContactPage({ route, navigation }: any) {
       if (error) throw error;
       if (data) {
         setName(data.Name || '');
-        setPhone(data.Phonenumber || '');
         setNotes(data.OtherDetails || '');
+
+        const numbers = (data.Phonenumber || '').split(',').map((p: string) => p.trim()).filter(Boolean);
+        const labels = (data.Phonelabels || '').split(',').map((l: string) => l.trim()).filter(Boolean);
+
+        if (numbers.length > 0) {
+          const mappedEntries = numbers.map((num: string, idx: number) => ({
+            number: num,
+            label: labels[idx] || 'Mobile',
+          }));
+          setPhoneEntries(mappedEntries);
+        } else {
+          setPhoneEntries([{ number: '', label: 'Mobile' }]);
+        }
 
         if (data.Tags) {
           const parsedTags = data.Tags.split(',')
@@ -208,7 +231,6 @@ export default function EditContactPage({ route, navigation }: any) {
           setTagsList([]);
         }
 
-        // Dynamically resolve linked contacts from phone string
         if (data.LinkedContactPhone) {
           const linkedPhones = data.LinkedContactPhone.split(',')
             .map((p: string) => p.trim().slice(-10))
@@ -219,7 +241,7 @@ export default function EditContactPage({ route, navigation }: any) {
 
           const { data: contactsData } = await supabase
             .from('Contacts_Table')
-            .select('id, Name, Phonenumber, Tags')
+            .select('id, Name, Phonenumber, Phonelabels, Tags')
             .eq('Userphonenumber', activeUser);
 
           if (contactsData) {
@@ -250,7 +272,6 @@ export default function EditContactPage({ route, navigation }: any) {
     }
   };
 
-  // Section 1: Standard Keyword Tags Filter (All matches)
   const tagSuggestions = useMemo(() => {
     const query = tagInput.trim().toLowerCase();
     if (!query) return [];
@@ -261,25 +282,25 @@ export default function EditContactPage({ route, navigation }: any) {
     });
   }, [tagInput, allAvailableTags, tagsList]);
 
-  // Section 2: Contact Links Filter (All matches with Matched Tag Priority)
   const contactSuggestions = useMemo(() => {
     const query = tagInput.trim().toLowerCase();
     if (!query) return [];
 
     const linkedPhonesSet = new Set(linkedContacts.map((c) => c.phone));
-    const currentContactPhone = phone.trim().slice(-10);
+    const currentInputPhones = new Set(phoneEntries.map((e) => e.number.trim().slice(-10)).filter(Boolean));
 
     return allContacts
       .filter((contact) => {
-        const cleanContactPhone = (contact.Phonenumber || '').replace(/\D/g, '').slice(-10);
+        const contactNumbers = (contact.Phonenumber || '').split(',').map(n => n.replace(/\D/g, '').slice(-10));
+        
+        const isSelfMatch = contactNumbers.some(num => currentInputPhones.has(num));
+        if (isSelfMatch) return false;
 
-        // Don't show self in suggestion list
-        if (currentContactPhone && cleanContactPhone === currentContactPhone) return false;
-        // Don't show contacts already linked in chips
-        if (linkedPhonesSet.has(cleanContactPhone)) return false;
+        const isAlreadyLinked = contactNumbers.some(num => linkedPhonesSet.has(num));
+        if (isAlreadyLinked) return false;
 
         const nameMatch = contact.Name?.toLowerCase().includes(query);
-        const phoneMatch = cleanContactPhone.includes(query);
+        const phoneMatch = contactNumbers.some(num => num.includes(query));
         const tagsMatch = contact.Tags?.toLowerCase().includes(query);
 
         return nameMatch || phoneMatch || tagsMatch;
@@ -301,16 +322,78 @@ export default function EditContactPage({ route, navigation }: any) {
         });
 
         const sortedTags = [...matchedTags, ...otherTags];
-        const clean10 = (contact.Phonenumber || '').replace(/\D/g, '').slice(-10);
+        const primaryCleanPhone = (contact.Phonenumber || '').split(',')[0].replace(/\D/g, '').slice(-10);
 
         return {
           ...contact,
-          cleanPhone: clean10,
+          cleanPhone: primaryCleanPhone,
           sortedTags,
           hasDirectTagMatch: matchedTags.length > 0,
         };
       });
-  }, [tagInput, allContacts, phone, linkedContacts]);
+  }, [tagInput, allContacts, phoneEntries, linkedContacts]);
+
+  const handleAddPhoneField = () => {
+    const lastEntry = phoneEntries[phoneEntries.length - 1];
+    if (!lastEntry || lastEntry.number.trim().length !== 10) {
+      Alert.alert('Incomplete Number', 'Please enter a valid 10-digit phone number in the current row before adding a new one.');
+      return;
+    }
+    setPhoneEntries((prev) => [...prev, { number: '', label: 'Mobile' }]);
+  };
+
+  const handleRemovePhoneField = (index: number) => {
+    if (phoneEntries.length === 1) return;
+    setPhoneEntries((prev) => prev.filter((_, i) => i !== index));
+    if (activeLabelIndex === index) setActiveLabelIndex(null);
+  };
+
+  const handleUpdatePhoneEntry = (index: number, field: 'number' | 'label', value: string) => {
+    const cleanedValue = field === 'number' ? value.replace(/\D/g, '').slice(0, 10) : value;
+
+    setPhoneEntries((prev) => {
+      const updated = [...prev];
+      updated[index][field] = cleanedValue;
+      return updated;
+    });
+
+    if (field === 'number' && cleanedValue.length === 10) {
+      const isDuplicateInForm = phoneEntries.some(
+        (entry, idx) => idx !== index && entry.number.trim() === cleanedValue
+      );
+
+      if (isDuplicateInForm) {
+        Alert.alert('Duplicate Number', 'This phone number is already entered in another row.');
+        return;
+      }
+
+      Promise.resolve(
+        supabase
+          .from('Contacts_Table')
+          .select('id, Name')
+          .eq('Userphonenumber', userPhone)
+          .neq('id', id)
+          .or(`Phonenumber.eq.${cleanedValue},Phonenumber.like.%${cleanedValue}%`)
+      )
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            Alert.alert('Duplicate Contact', 'This phone number is already saved in another contact.');
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
+  const handleMoveToPrimary = (index: number) => {
+    if (index === 0) return;
+    setPhoneEntries((prev) => {
+      const updated = [...prev];
+      const [targetItem] = updated.splice(index, 1);
+      updated.unshift(targetItem);
+      return updated;
+    });
+    setActiveLabelIndex(null);
+  };
 
   const handleAddTag = (text: string) => {
     const clean = text.replace(/,/g, '').trim();
@@ -329,7 +412,7 @@ export default function EditContactPage({ route, navigation }: any) {
   };
 
   const handleSelectContact = (contact: any) => {
-    const clean10 = contact.cleanPhone || (contact.Phonenumber || '').replace(/\D/g, '').slice(-10);
+    const clean10 = contact.cleanPhone || (contact.Phonenumber || '').split(',')[0].replace(/\D/g, '').slice(-10);
     const primaryTag = contact.sortedTags && contact.sortedTags[0] ? contact.sortedTags[0] : '';
 
     if (!linkedContacts.some((c) => c.phone === clean10)) {
@@ -401,8 +484,41 @@ export default function EditContactPage({ route, navigation }: any) {
   };
 
   const handleUpdate = async () => {
-    if (!name.trim()) return Alert.alert('Alert', 'Enter Name');
-    if (phone.trim().length !== 10) return Alert.alert('Alert', 'Phone number must be 10 digits.');
+    if (!name.trim()) {
+      Alert.alert('Alert', 'Please enter Name');
+      return;
+    }
+
+    const seenNumbers = new Set<string>();
+    for (let i = 0; i < phoneEntries.length; i++) {
+      const entry = phoneEntries[i];
+      if (!entry.number.trim() && !entry.label.trim()) continue;
+
+      if (!entry.label.trim()) {
+        Alert.alert('Alert', `Please enter a label for phone number row ${i + 1}.`);
+        return;
+      }
+      if (!entry.number.trim()) {
+        Alert.alert('Alert', `Please enter a phone number for row ${i + 1} (${entry.label}).`);
+        return;
+      }
+      if (entry.number.trim().length !== 10 || !/^\d{10}$/.test(entry.number.trim())) {
+        Alert.alert('Alert', `Phone number in row ${i + 1} must be exactly 10 digits.`);
+        return;
+      }
+
+      if (seenNumbers.has(entry.number.trim())) {
+        Alert.alert('Duplicate Number', `Phone number "${entry.number.trim()}" is duplicated in the form.`);
+        return;
+      }
+      seenNumbers.add(entry.number.trim());
+    }
+
+    const validEntries = phoneEntries.filter((e) => e.number.trim().length > 0);
+    if (validEntries.length === 0) {
+      Alert.alert('Alert', 'Please enter at least one valid phone number.');
+      return;
+    }
 
     const currentPending = tagInput.replace(/,/g, '').trim();
     const finalTags = [...tagsList];
@@ -410,10 +526,34 @@ export default function EditContactPage({ route, navigation }: any) {
       finalTags.push(currentPending);
     }
 
-    if (finalTags.length === 0) return Alert.alert('Alert', 'Enter Tags');
+    if (finalTags.length === 0) {
+      Alert.alert('Alert', 'Please enter at least one Tag');
+      return;
+    }
 
     setSaving(true);
     try {
+      for (const entry of validEntries) {
+        const num = entry.number.trim();
+        const { data: existing, error: checkError } = await supabase
+          .from('Contacts_Table')
+          .select('id, Name')
+          .eq('Userphonenumber', userPhone)
+          .neq('id', id)
+          .or(`Phonenumber.eq.${num},Phonenumber.like.%${num}%`);
+
+        if (checkError) throw checkError;
+
+        if (existing && existing.length > 0) {
+          Alert.alert('Duplicate Contact', `Phone number ${num} is already saved under another contact.`);
+          setSaving(false);
+          return;
+        }
+      }
+
+      const numbersStr = validEntries.map((e) => e.number.trim()).join(', ');
+      const labelsStr = validEntries.map((e) => e.label.trim() || 'Mobile').join(', ');
+
       const sanitizedTags = finalTags
         .map((t) => t.trim())
         .filter(Boolean)
@@ -428,7 +568,8 @@ export default function EditContactPage({ route, navigation }: any) {
         .from('Contacts_Table')
         .update({
           Name: name.trim(),
-          Phonenumber: phone.trim(),
+          Phonenumber: numbersStr,
+          Phonelabels: labelsStr,
           Tags: sanitizedTags,
           OtherDetails: notes.trim(),
           LinkedContactPhone: linkedPhonesString,
@@ -469,7 +610,7 @@ export default function EditContactPage({ route, navigation }: any) {
     ]);
   };
 
-  const activeTags = tagTab === 'most' ? mostUsedTags : recentTags;
+  const activeTags = tagTab === 'recent' ? recentTags : mostUsedTags;
 
   if (loading) {
     return (
@@ -489,12 +630,12 @@ export default function EditContactPage({ route, navigation }: any) {
     >
       <ScrollView
         ref={scrollViewRef}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: 32 }]}
+        contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.card}>
-          <Text style={styles.label}>Full Name *</Text>
+          <Text style={styles.labelTop}>Full Name *</Text>
           <TextInput
             style={styles.input}
             placeholder="John Doe"
@@ -503,16 +644,87 @@ export default function EditContactPage({ route, navigation }: any) {
             onChangeText={setName}
           />
 
-          <Text style={styles.label}>Phone Number (10 digits) *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="9876543210"
-            placeholderTextColor="#94A3B8"
-            keyboardType="numeric"
-            maxLength={10}
-            value={phone}
-            onChangeText={setPhone}
-          />
+          {/* Multiple Phone Numbers & Labels Section */}
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.label}>Phone Numbers & Labels *</Text>
+            <TouchableOpacity onPress={handleAddPhoneField} style={styles.addPhoneRowBtn} activeOpacity={0.7}>
+              <Ionicons name="add-circle" size={16} color="#2563EB" />
+              <Text style={styles.addPhoneRowBtnText}>Add Number</Text>
+            </TouchableOpacity>
+          </View>
+
+          {phoneEntries.map((entry, index) => {
+            const filteredSuggestions = POPULAR_LABELS.filter(
+              l => l.toLowerCase().includes(entry.label.toLowerCase()) && l.toLowerCase() !== entry.label.toLowerCase()
+            );
+
+            return (
+              <View key={index} style={styles.phoneRowWrapper}>
+                <View style={styles.phoneInputRow}>
+                  <View style={styles.labelInputContainer}>
+                    <TextInput
+                      style={styles.phoneLabelInput}
+                      placeholder="Label"
+                      placeholderTextColor="#94A3B8"
+                      value={entry.label}
+                      onChangeText={(val) => {
+                        handleUpdatePhoneEntry(index, 'label', val);
+                        setActiveLabelIndex(index);
+                      }}
+                      onFocus={() => setActiveLabelIndex(index)}
+                    />
+                  </View>
+
+                  <TextInput
+                    style={styles.phoneNumberInput}
+                    placeholder="10-digit number"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="numeric"
+                    maxLength={10}
+                    value={entry.number}
+                    onChangeText={(val) => handleUpdatePhoneEntry(index, 'number', val)}
+                  />
+
+                  {index > 0 && (
+                    <TouchableOpacity
+                      onPress={() => handleMoveToPrimary(index)}
+                      style={styles.actionIconButton}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="chevron-up" size={18} color="#D97706" />
+                    </TouchableOpacity>
+                  )}
+
+                  {phoneEntries.length > 1 && (
+                    <TouchableOpacity
+                      onPress={() => handleRemovePhoneField(index)}
+                      style={styles.deleteIconButton}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {activeLabelIndex === index && filteredSuggestions.length > 0 && (
+                  <View style={styles.labelSuggestionsDropdown}>
+                    {filteredSuggestions.map((sug, sIdx) => (
+                      <TouchableOpacity
+                        key={sIdx}
+                        style={styles.labelSuggestionItem}
+                        onPress={() => {
+                          handleUpdatePhoneEntry(index, 'label', sug);
+                          setActiveLabelIndex(null);
+                        }}
+                      >
+                        <Text style={styles.labelSuggestionText}>{sug}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+            );
+          })}
 
           {/* Tags & Suggestions Section */}
           <View
@@ -536,7 +748,6 @@ export default function EditContactPage({ route, navigation }: any) {
               style={styles.tagInputWrapper}
               onPress={() => tagInputRef.current?.focus()}
             >
-              {/* Linked Contact Chips */}
               {linkedContacts.map((contact) => (
                 <View key={`linked-${contact.phone}`} style={styles.linkedChip}>
                   <Ionicons name="link" size={13} color="#4F46E5" />
@@ -553,7 +764,6 @@ export default function EditContactPage({ route, navigation }: any) {
                 </View>
               ))}
 
-              {/* Category Tags */}
               {tagsList.map((tag, idx) => (
                 <View key={`tag-${idx}`} style={styles.selectedTagChip}>
                   <Text style={styles.selectedTagText}>{tag}</Text>
@@ -588,7 +798,6 @@ export default function EditContactPage({ route, navigation }: any) {
               />
             </TouchableOpacity>
 
-            {/* Scrollable Dual Dropdown */}
             {(tagSuggestions.length > 0 || contactSuggestions.length > 0) && (
               <View style={styles.suggestionsDropdownContainer}>
                 <ScrollView
@@ -703,20 +912,20 @@ export default function EditContactPage({ route, navigation }: any) {
               <View style={styles.suggestionsContainer}>
                 <View style={styles.tagTabsRow}>
                   <TouchableOpacity
-                    onPress={() => setTagTab('most')}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  >
-                    <Text style={[styles.tabLabel, tagTab === 'most' && styles.tabLabelActive]}>
-                      Most Used
-                    </Text>
-                  </TouchableOpacity>
-                  <Text style={styles.tabDivider}>|</Text>
-                  <TouchableOpacity
                     onPress={() => setTagTab('recent')}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   >
                     <Text style={[styles.tabLabel, tagTab === 'recent' && styles.tabLabelActive]}>
                       Recently Used
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={styles.tabDivider}>|</Text>
+                  <TouchableOpacity
+                    onPress={() => setTagTab('most')}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Text style={[styles.tabLabel, tagTab === 'most' && styles.tabLabelActive]}>
+                      Most Used
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -751,7 +960,7 @@ export default function EditContactPage({ route, navigation }: any) {
         </View>
       </ScrollView>
 
-      {/* Pinned Action Bar with hardware navigation-safe bottom padding */}
+      {/* Pinned Action Bar */}
       <View style={[styles.bottomBar, { paddingBottom: dynamicBottomPadding }]}>
         <TouchableOpacity
           style={styles.saveBtn}
@@ -815,30 +1024,126 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 4,
+    paddingBottom: 32,
   },
   card: {
     backgroundColor: '#FFFFFF',
-    padding: 18,
+    padding: 20,
     borderRadius: 14,
     elevation: 2,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 4,
   },
+  labelTop: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+    marginBottom: 4,
+  },
   label: {
     fontSize: 13,
     fontWeight: '600',
     color: '#475569',
-    marginTop: 12,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  addPhoneRowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  addPhoneRowBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
+  phoneRowWrapper: {
     marginBottom: 6,
+    position: 'relative',
+    zIndex: 10,
+  },
+  phoneInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  labelInputContainer: {
+    width: 80,
+  },
+  phoneLabelInput: {
+    height: 44,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 8,
+    fontSize: 12,
+    color: '#0F172A',
+    fontWeight: '600',
+  },
+  labelSuggestionsDropdown: {
+    position: 'absolute',
+    top: 46,
+    left: 0,
+    width: 105,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 8,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    zIndex: 100,
+  },
+  labelSuggestionItem: {
+    paddingVertical: 7,
+    paddingHorizontal: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F5F9',
+  },
+  labelSuggestionText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  phoneNumberInput: {
+    flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    fontSize: 15,
+    color: '#0F172A',
+  },
+  actionIconButton: {
+    padding: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deleteIconButton: {
+    padding: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: -4,
   },
   tagsLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 12,
-    marginBottom: 6,
+    marginTop: 10,
+    marginBottom: 4,
   },
   labelInRow: {
     fontSize: 13,
@@ -854,7 +1159,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#CBD5E1',
     borderRadius: 8,
-    minHeight: 46,
+    minHeight: 44,
     paddingHorizontal: 12,
     fontSize: 15,
     color: '#0F172A',
@@ -867,10 +1172,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#CBD5E1',
     borderRadius: 8,
-    padding: 8,
+    padding: 6,
     gap: 6,
     backgroundColor: '#F8FAFC',
-    minHeight: 46,
+    minHeight: 44,
   },
   linkedChip: {
     flexDirection: 'row',
@@ -878,8 +1183,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#EEF2FF',
     borderColor: '#818CF8',
     borderWidth: 1.5,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
     borderRadius: 14,
     gap: 6,
     maxWidth: '100%',
@@ -896,8 +1201,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#EEF2FF',
     borderColor: '#C7D2FE',
     borderWidth: 1,
-    paddingVertical: 4,
-    paddingHorizontal: 9,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
     borderRadius: 14,
     gap: 5,
   },
@@ -911,8 +1216,8 @@ const styles = StyleSheet.create({
     minWidth: 140,
     fontSize: 14,
     color: '#0F172A',
-    paddingVertical: 4,
-    paddingHorizontal: 6,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
   },
   suggestionsDropdownContainer: {
     backgroundColor: '#FFFFFF',
@@ -1057,12 +1362,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
     textAlignVertical: 'top',
   },
-  suggestionsContainer: { marginTop: 10 },
+  suggestionsContainer: { marginTop: 8 },
   tagTabsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   tabLabel: {
     fontSize: 12,

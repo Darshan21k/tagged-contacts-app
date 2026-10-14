@@ -28,7 +28,6 @@ import { Contact, FollowupItem } from '../types';
 import ContactCardSkeleton from '../components/ContactCardSkeleton'; 
 import OnboardingModal from '../components/OnboardingModal';
 
-
 interface ResolvedLinkBadge {
   name: string;
   phone: string;
@@ -98,6 +97,19 @@ const ContactCard = React.memo(
     const isStarred = Boolean(item.is_starred);
     const isSearchPriority = Boolean(item.is_search_priority);
     const swipeableRef = useRef<Swipeable>(null);
+
+    const phoneEntries = useMemo(() => {
+      const numbers = (item.Phonenumber || '').split(',').map((p) => p.trim()).filter(Boolean);
+      const labels = ((item as any).Phonelabels || '').split(',').map((l: string) => l.trim()).filter(Boolean);
+
+      return numbers.map((num, idx) => ({
+        number: num,
+        label: labels[idx] || 'Mobile',
+      }));
+    }, [item.Phonenumber, (item as any).Phonelabels]);
+
+    const primaryPhone = phoneEntries[0]?.number || '';
+    const secondaryPhones = phoneEntries.slice(1);
 
     const tagList = useMemo(() => {
       if (!item.Tags) return [];
@@ -258,8 +270,6 @@ const ContactCard = React.memo(
       );
     };
 
-    
-  
     return (
       <View style={styles.swipeableWrapper}>
         <Swipeable
@@ -310,10 +320,10 @@ const ContactCard = React.memo(
                         size={18}
                         color={
                           isSearchPriority
-                            ? '#38BDF8' // Light Blue for Search Priority
+                            ? '#38BDF8'
                             : isStarred
-                            ? '#F59E0B' // Yellow for Standard Star
-                            : '#94A3B8' // Gray for Unstarred
+                            ? '#F59E0B'
+                            : '#94A3B8'
                         }
                       />
                     </TouchableOpacity>
@@ -331,17 +341,25 @@ const ContactCard = React.memo(
                   )}
                 </View>
 
-                <TouchableOpacity
-                  style={styles.phoneChipTouchable}
-                  onPress={() => onCopyPhone(item.Phonenumber)}
-                  activeOpacity={0.6}
-                  disabled={isSelectionMode}
-                >
-                  <View style={styles.phoneRow}>
-                    <Ionicons name="call-outline" size={15} color="#2563EB" />
-                    <Text style={styles.phoneText}>{item.Phonenumber}</Text>
-                  </View>
-                </TouchableOpacity>
+                {/* Primary Phone Row */}
+                {phoneEntries.length > 0 && (
+                  <TouchableOpacity
+                    style={styles.phoneChipTouchable}
+                    onPress={() => onCopyPhone(primaryPhone)}
+                    activeOpacity={0.6}
+                    disabled={isSelectionMode}
+                  >
+                    <View style={styles.phoneRow}>
+                      <Ionicons name="call-outline" size={15} color="#2563EB" />
+                      <Text style={styles.phoneText}>{primaryPhone}</Text>
+                      {phoneEntries[0].label ? (
+                        <View style={[styles.labelBadge, styles.secondaryLabelBadge]}>
+                          <Text style={[styles.labelBadgeText, styles.secondaryLabelBadgeText]}>{phoneEntries[0].label}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                )}
               </View>
 
               {!isSelectionMode && (
@@ -359,7 +377,7 @@ const ContactCard = React.memo(
 
                   <TouchableOpacity
                     style={[styles.iconButton, styles.whatsappButton]}
-                    onPress={() => onWhatsApp(item.Phonenumber)}
+                    onPress={() => onWhatsApp(primaryPhone)}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   >
                     <Ionicons name="logo-whatsapp" size={18} color="#FFFFFF" />
@@ -367,7 +385,7 @@ const ContactCard = React.memo(
 
                   <TouchableOpacity
                     style={[styles.iconButton, styles.callButton]}
-                    onPress={() => onCall(item.Phonenumber)}
+                    onPress={() => onCall(primaryPhone)}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   >
                     <Ionicons name="call" size={17} color="#FFFFFF" />
@@ -375,6 +393,48 @@ const ContactCard = React.memo(
                 </View>
               )}
             </View>
+
+            {/* Stacked Secondary Phone Rows */}
+            {secondaryPhones.map((sec, sIdx) => (
+              <View key={`sec-phone-${sIdx}`} style={styles.secondaryPhoneRowWrapper}>
+                <TouchableOpacity
+                  style={styles.phoneChipTouchable}
+                  onPress={() => onCopyPhone(sec.number)}
+                  activeOpacity={0.6}
+                  disabled={isSelectionMode}
+                >
+                  <View style={styles.phoneRow}>
+                    <Ionicons name="call-outline" size={14} color="#64748B" />
+                    <Text style={styles.secondaryPhoneText}>{sec.number}</Text>
+                    {sec.label ? (
+                      <View style={[styles.labelBadge, styles.secondaryLabelBadge]}>
+                        <Text style={[styles.labelBadgeText, styles.secondaryLabelBadgeText]}>{sec.label}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </TouchableOpacity>
+
+                {!isSelectionMode && (
+                  <View style={styles.secondaryActionButtons}>
+                    <TouchableOpacity
+                      style={[styles.secondaryIconButton, styles.whatsappButton]}
+                      onPress={() => onWhatsApp(sec.number)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Ionicons name="logo-whatsapp" size={14} color="#FFFFFF" />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.secondaryIconButton, styles.callButton]}
+                      onPress={() => onCall(sec.number)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Ionicons name="call" size={13} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            ))}
 
             {(tagList.length > 0 || resolvedLinks.length > 0) && (
               <View style={styles.tagContainer}>
@@ -476,22 +536,24 @@ export default function ContactsScreen({ navigation, route }: any) {
   const [isPriorityFilterActive, setIsPriorityFilterActive] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showOnboarding, setShowOnboarding] = useState(false);
-  
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
-useFocusEffect(
-  useCallback(() => {
-    (async () => {
-      try {
-        const hasSeen = await AsyncStorage.getItem('@has_seen_onboarding');
-        if (!hasSeen) {
-          setShowOnboarding(true);
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        try {
+          const hasSeen = await AsyncStorage.getItem('@has_seen_onboarding');
+          if (!hasSeen) {
+            setShowOnboarding(true);
+          }
+        } catch (err) {
+          console.warn('Failed to load onboarding state:', err);
         }
-      } catch (err) {
-        console.warn('Failed to load onboarding state:', err);
-      }
-    })();
-  }, [])
-);
+      })();
+    }, [])
+  );
+
+  
 
   const activeTerms = useMemo(() => {
     const q = (searchQuery || '').trim().toLowerCase();
@@ -507,13 +569,11 @@ useFocusEffect(
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
 
-  // Bulk Add Modal State
   const [isTagModalVisible, setIsTagModalVisible] = useState(false);
   const [bulkTagInput, setBulkTagInput] = useState('');
   const [stagedBulkTags, setStagedBulkTags] = useState<string[]>([]);
   const [stagedBulkLinks, setStagedBulkLinks] = useState<StagedLinkedContact[]>([]);
 
-  // Bulk Remove Modal State
   const [isRemoveTagModalVisible, setIsRemoveTagModalVisible] = useState(false);
   const [originalDraftItems, setOriginalDraftItems] = useState<DraftRemoveItem[]>([]);
   const [activeDraftItemIds, setActiveDraftItemIds] = useState<string[]>([]);
@@ -633,6 +693,52 @@ useFocusEffect(
     }
   }, []);
 
+  const cleanupOrphanedPinnedTags = useCallback(async (activePhone: string) => {
+    try {
+      const { data: pinnedRows, error: pinError } = await supabase
+        .from('PinnedTags')
+        .select('Tagname')
+        .eq('Userphonenumber', activePhone);
+
+      if (pinError || !pinnedRows || pinnedRows.length === 0) return;
+
+      const { data: contactsData, error: contactError } = await supabase
+        .from('Contacts_Table')
+        .select('Tags')
+        .eq('Userphonenumber', activePhone);
+
+      if (contactError || !contactsData) return;
+
+      const activeTagsSet = new Set<string>();
+      contactsData.forEach((c) => {
+        if (c.Tags) {
+          c.Tags.split(',').forEach((t: string) => {
+            const clean = t.trim().toLowerCase();
+            if (clean) activeTagsSet.add(clean);
+          });
+        }
+      });
+
+      const orphanedTags = pinnedRows
+        .map((p) => p.Tagname)
+        .filter((tagName) => !activeTagsSet.has(tagName.trim().toLowerCase()));
+
+      if (orphanedTags.length > 0) {
+        for (const orphan of orphanedTags) {
+          await supabase
+            .from('PinnedTags')
+            .delete()
+            .eq('Userphonenumber', activePhone)
+            .ilike('Tagname', orphan);
+        }
+        // Refresh your pinned tags state immediately after cleanup
+        fetchPinnedTags(activePhone);
+      }
+    } catch (err) {
+      console.warn('Failed to cleanup orphaned pinned tags on load:', err);
+    }
+  }, [fetchPinnedTags]);
+
   const fetchContactsData = useCallback(async (phoneOverride?: string) => {
     try {
       const activePhone = phoneOverride || (await AsyncStorage.getItem('user_phone')) || userPhone;
@@ -727,6 +833,7 @@ useFocusEffect(
             fetchPinnedTags(active),
             fetchContactsData(active),
             fetchFollowupsData(active),
+            cleanupOrphanedPinnedTags(active),
           ]);
           if (isMounted) setLoading(false);
         }
@@ -741,6 +848,8 @@ useFocusEffect(
   const handlePullRefresh = useCallback(async () => {
     if (isSelectionMode) return;
     closeActiveSwipeable();
+    setIsSearchFocused(false);
+    Keyboard.dismiss();
     setRefreshing(true);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -750,7 +859,6 @@ useFocusEffect(
       setIsStarredFilterActive(false);
       setIsPriorityFilterActive(false);
       setShowSuggestions(false);
-      Keyboard.dismiss();
       saveSearchState('', null, false);
     }
 
@@ -778,6 +886,7 @@ useFocusEffect(
 
   const handleResetAndRefresh = useCallback(async () => {
     closeActiveSwipeable();
+    setIsSearchFocused(false);
     setSearchQuery('');
     setSelectedTag(null);
     setIsStarredFilterActive(false);
@@ -813,6 +922,7 @@ useFocusEffect(
   useEffect(() => {
     const unsubscribe = navigation.addListener('tabPress', () => {
       closeActiveSwipeable();
+      setIsSearchFocused(false);
       if (navigation.isFocused()) {
         handleResetAndRefresh();
       }
@@ -820,7 +930,6 @@ useFocusEffect(
     return unsubscribe;
   }, [navigation, handleResetAndRefresh, closeActiveSwipeable]);
 
-  // Single Tap: Turns star Yellow (is_starred = true, is_search_priority = false).
   const handleToggleStar = useCallback(
     async (contact: Contact) => {
       const isCurrentlyActive = Boolean(contact.is_starred || contact.is_search_priority);
@@ -859,7 +968,6 @@ useFocusEffect(
     [showToast]
   );
 
-  // Long Press: Turns star Light Blue (is_search_priority = true, is_starred = false)
   const handleTogglePriorityStar = useCallback(
     async (contact: Contact) => {
       const isCurrentlyPriority = Boolean(contact.is_search_priority);
@@ -1061,7 +1169,6 @@ useFocusEffect(
     };
   }, [bulkTagInput, pinnedTags, allContacts, stagedBulkTags, stagedBulkLinks]);
 
-  // Upgraded token-based filtering and ranking with exact tag prioritization & star floating
   const filteredContacts = useMemo(() => {
     let result = allContacts;
 
@@ -1108,6 +1215,22 @@ useFocusEffect(
           }
         }
 
+        for (const otherC of allContacts) {
+          if (otherC.id === c.id) continue;
+          const otherLinks = ((otherC as any).LinkedContactPhone || '')
+            .split(',')
+            .map((p: string) => p.trim().slice(-10))
+            .filter(Boolean);
+          
+          if (otherLinks.includes(contactCleanPhone)) {
+            const otherName = (otherC.Name || '').toLowerCase();
+            const otherTags = otherC.Tags ? otherC.Tags.split(',').map((t: string) => t.trim().toLowerCase()) : [];
+            if (otherName === tagLower || otherTags.includes(tagLower)) {
+              return true;
+            }
+          }
+        }
+
         return false;
       });
     }
@@ -1121,18 +1244,50 @@ useFocusEffect(
           const contactName = (c.Name || '').toLowerCase();
           const contactPhone = c.Phonenumber || '';
           const contactDetails = (c.OtherDetails || '').toLowerCase();
+          const contactCleanPhone = contactPhone.replace(/\D/g, '').slice(-10);
 
           const rawTags = c.Tags
             ? c.Tags.split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean)
             : [];
 
-          let nameMatch = searchWords.every((word) => contactName.includes(word));
+          let linkedNames: string[] = [];
+          let linkedTags: string[] = [];
+          const linkedPhones = ((c as any).LinkedContactPhone || '')
+            .split(',')
+            .map((p: string) => p.trim().slice(-10))
+            .filter(Boolean);
+
+          linkedPhones.forEach((lPhone: string) => {
+            const lp = contactsMap.get(lPhone);
+            if (lp) {
+              if (lp.Name) linkedNames.push(lp.Name.toLowerCase());
+              if (lp.Tags) {
+                lp.Tags.split(',').forEach((t: string) => linkedTags.push(t.trim().toLowerCase()));
+              }
+            }
+          });
+
+          allContacts.forEach((otherC) => {
+            if (otherC.id === c.id) return;
+            const otherLinks = ((otherC as any).LinkedContactPhone || '')
+              .split(',')
+              .map((p: string) => p.trim().slice(-10))
+              .filter(Boolean);
+            if (otherLinks.includes(contactCleanPhone)) {
+              if (otherC.Name) linkedNames.push(otherC.Name.toLowerCase());
+              if (otherC.Tags) {
+                otherC.Tags.split(',').forEach((t: string) => linkedTags.push(t.trim().toLowerCase()));
+              }
+            }
+          });
+
+          let nameMatch = searchWords.every((word) => contactName.includes(word) || linkedNames.some(ln => ln.includes(word)));
           let phoneMatch = searchWords.every((word) => contactPhone.includes(word));
           let notesMatch = searchWords.every((word) => contactDetails.includes(word));
 
           let exactTagMatchCount = 0;
           let allWordsFoundInTags = searchWords.every((word) => 
-            rawTags.some((tag) => tag.includes(word))
+            rawTags.some((tag) => tag.includes(word)) || linkedTags.some((lt) => lt.includes(word))
           );
 
           searchWords.forEach((word) => {
@@ -1140,6 +1295,9 @@ useFocusEffect(
               if (tag === word) {
                 exactTagMatchCount++;
               }
+            });
+            linkedTags.forEach((lt) => {
+              if (lt === word) exactTagMatchCount++;
             });
           });
 
@@ -1156,22 +1314,28 @@ useFocusEffect(
         })
         .filter((item) => item.isRelevant)
         .sort((a, b) => {
-          // PRIORITY 0: Light Blue Star (Search Priority) floats absolute first during search
+          const aName = (a.contact.Name || '').toLowerCase();
+          const bName = (b.contact.Name || '').toLowerCase();
+          const qLower = searchQuery.trim().toLowerCase();
+          
+          const aIsNameExact = aName === qLower || aName.startsWith(qLower);
+          const bIsNameExact = bName === qLower || bName.startsWith(qLower);
+
+          if (aIsNameExact !== bIsNameExact) {
+            return aIsNameExact ? -1 : 1;
+          }
           if (Boolean(b.contact.is_search_priority) !== Boolean(a.contact.is_search_priority)) {
             return b.contact.is_search_priority ? 1 : -1;
           }
 
-          // PRIORITY 0.5: Yellow Star (Standard Star) floats second during search
           if (Boolean(b.contact.is_starred) !== Boolean(a.contact.is_starred)) {
             return b.contact.is_starred ? 1 : -1;
           }
 
-          // PRIORITY 1: Exact whole-tag match count comes next
           if (b.exactTagMatchCount !== a.exactTagMatchCount) {
             return b.exactTagMatchCount - a.exactTagMatchCount;
           }
 
-          // Priority 2: Alphabetical by Name
           return (a.contact.Name || '').localeCompare(b.contact.Name || '');
         })
         .map((item) => item.contact);
@@ -1219,6 +1383,7 @@ useFocusEffect(
 
   const handleEnterSelectionMode = useCallback((initialId: number) => {
     closeActiveSwipeable();
+    setIsSearchFocused(false);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setIsSelectionMode(true);
     setSelectedContactIds(new Set([initialId]));
@@ -1701,9 +1866,11 @@ useFocusEffect(
 
   const handleSelectSuggestion = useCallback((text: string, type: 'name' | 'tag') => {
     closeActiveSwipeable();
+    setIsSearchFocused(false);
     setSearchQuery(text);
     setIsStarredFilterActive(false);
     setIsPriorityFilterActive(false);
+    
     if (type === 'tag') {
       setSelectedTag(text);
       saveSearchState(text, text, false);
@@ -1711,13 +1878,16 @@ useFocusEffect(
       setSelectedTag(null);
       saveSearchState(text, null, false);
     }
+
     setShowSuggestions(false);
     Keyboard.dismiss();
   }, [closeActiveSwipeable, saveSearchState]);
 
   const handleTagPress = useCallback((tag: string | null) => {
-    Haptics.selectionAsync(); // Adds subtle tactile feedback on tap
+    Haptics.selectionAsync();
     closeActiveSwipeable();
+    setIsSearchFocused(false);
+    Keyboard.dismiss();
     try {
       sectionListRef.current?.scrollToLocation({
         sectionIndex: 0,
@@ -1756,8 +1926,10 @@ useFocusEffect(
   }, [closeActiveSwipeable, saveSearchState]);
 
   const handleToggleStarredTag = useCallback(() => {
-   Haptics.selectionAsync();
+    Haptics.selectionAsync();
     closeActiveSwipeable();
+    setIsSearchFocused(false);
+    Keyboard.dismiss();
     try {
       sectionListRef.current?.scrollToLocation({
         sectionIndex: 0,
@@ -1783,6 +1955,8 @@ useFocusEffect(
   const handleTogglePriorityTag = useCallback(() => {
     Haptics.selectionAsync();
     closeActiveSwipeable();
+    setIsSearchFocused(false);
+    Keyboard.dismiss();
     try {
       sectionListRef.current?.scrollToLocation({
         sectionIndex: 0,
@@ -1807,6 +1981,7 @@ useFocusEffect(
 
   const openTagsModal = useCallback(() => {
     closeActiveSwipeable();
+    setIsSearchFocused(false);
     Keyboard.dismiss();
     navigation.navigate('PopTags', {
       userPhone,
@@ -1834,6 +2009,7 @@ useFocusEffect(
 
   const openManageTagsModal = useCallback(() => {
     closeActiveSwipeable();
+    setIsSearchFocused(false);
     Keyboard.dismiss();
     navigation.navigate('ManageTags', { userPhone });
   }, [navigation, userPhone, closeActiveSwipeable]);
@@ -1883,16 +2059,18 @@ useFocusEffect(
 
   const handleLinkedBadgeSinglePress = useCallback((targetContact: Contact) => {
     closeActiveSwipeable();
+    setIsSearchFocused(false);
+    Keyboard.dismiss();
     const targetName = targetContact.Name ? targetContact.Name.trim() : '';
     if (!targetName) return;
 
     Haptics.selectionAsync();
-    setSelectedTag(null);
     setIsStarredFilterActive(false);
     setIsPriorityFilterActive(false);
+    setSelectedTag(targetName);
     setSearchQuery(targetName);
     setShowSuggestions(false);
-    saveSearchState(targetName, null, false);
+    saveSearchState(targetName, targetName, false);
 
     try {
       sectionListRef.current?.scrollToLocation({
@@ -1914,6 +2092,7 @@ useFocusEffect(
 
   const handleFollowupBellPress = useCallback((contact: Contact) => {
     closeActiveSwipeable();
+    setIsSearchFocused(false);
     Haptics.selectionAsync().catch(() => {});
     navigation.navigate('Followups', {
       userPhone,
@@ -1955,6 +2134,7 @@ useFocusEffect(
               handleToggleSelectCard(item.id);
             } else {
               closeActiveSwipeable();
+              setIsSearchFocused(false);
               navigation.navigate('EditContact', { id: item.id, userPhone });
             }
           }}
@@ -2014,17 +2194,24 @@ useFocusEffect(
 
     return (
       <View style={styles.scrollableHeaderContainer}>
-        <View style={styles.searchSection}>
-          <Ionicons name="search" size={18} color="#94A3B8" style={styles.searchIcon} />
+        {/* Blended Search Bar with Focus Highlighting */}
+        <View style={[styles.searchSection, isSearchFocused && styles.searchSectionFocused]}>
+          <Ionicons name="search" size={18} color={isSearchFocused ? '#2563EB' : '#94A3B8'} style={styles.searchIcon} />
           <TextInput
             ref={searchInputRef}
             style={styles.searchInput}
-            placeholder="Search Name, Phone, or Tag..."
+            placeholder={isSearchFocused ? '' : 'Search Name, Phone, or Tag...'}
             placeholderTextColor="#94A3B8"
             value={searchQuery}
             onFocus={() => {
               closeActiveSwipeable();
+              setIsSearchFocused(true);
               setShowSuggestions(true);
+            }}
+            onBlur={() => {
+              setTimeout(() => {
+                setIsSearchFocused(false);
+              }, 200);
             }}
             onChangeText={(text) => {
               setSearchQuery(text);
@@ -2041,6 +2228,10 @@ useFocusEffect(
               if (isPriorityFilterActive) {
                 setIsPriorityFilterActive(false);
               }
+            }}
+            onSubmitEditing={() => {
+              setIsSearchFocused(false);
+              Keyboard.dismiss();
             }}
             autoCorrect={false}
             clearButtonMode="never"
@@ -2091,7 +2282,6 @@ useFocusEffect(
           </View>
         )}
 
-        {/* FIXED PERMANENT CHIPS BAR (STARRED, PRIORITY, FOLLOW-UPS) */}
         <View style={styles.fixedChipsBarContainer}>
           <TouchableOpacity
             style={[
@@ -2176,6 +2366,7 @@ useFocusEffect(
             onPress={() => {
               Haptics.selectionAsync();
               closeActiveSwipeable();
+              setIsSearchFocused(false);
               Haptics.selectionAsync().catch(() => {});
               navigation.navigate('Followups', { userPhone });
             }}
@@ -2193,7 +2384,6 @@ useFocusEffect(
           </TouchableOpacity>
         </View>
 
-        {/* PINNED TAGS AREA (WITH "ALL" TAG INCLUDED) */}
         <View style={styles.tagsWindowCard}>
           <View style={styles.tagsWindowHeader}>
             <View style={styles.tagsTitleRow}>
@@ -2260,6 +2450,7 @@ useFocusEffect(
     selectedTag,
     isStarredFilterActive,
     isPriorityFilterActive,
+    isSearchFocused,
     totalStarredCount,
     totalPriorityCount,
     activeFollowups.length,
@@ -2335,6 +2526,7 @@ useFocusEffect(
             style={styles.recentTriggerBtn}
             onPress={() => {
               closeActiveSwipeable();
+              setIsSearchFocused(false);
               navigation.navigate('RecentActivity', {
                 allContacts,
                 userPhone,
@@ -2437,7 +2629,6 @@ useFocusEffect(
           {[1, 2, 3, 4, 5, 6, 7, 8].map((item) => (
             <ContactCardSkeleton key={item} />
           ))}
-          
         </View>
       ) : (
         <SectionList
@@ -2448,7 +2639,10 @@ useFocusEffect(
           ListHeaderComponent={ListHeader}
           renderSectionHeader={renderStickySectionHeader}
           stickySectionHeadersEnabled={true}
-          onScrollBeginDrag={closeActiveSwipeable}
+          onScrollBeginDrag={() => {
+            closeActiveSwipeable();
+            setIsSearchFocused(false);
+          }}
           contentContainerStyle={[
             styles.listContent,
             isSelectionMode && { paddingBottom: 110 },
@@ -2947,7 +3141,7 @@ useFocusEffect(
         </Pressable>
       </Modal>
 
-{showOnboarding && (
+      {showOnboarding && (
         <OnboardingModal onComplete={() => setShowOnboarding(false)} />
       )}
       {toastMessage && (
@@ -2985,10 +3179,17 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     borderRadius: 10,
     paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'transparent',
     elevation: 2,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 4,
+  },
+  searchSectionFocused: {
+    borderColor: '#3B82F6',
+    backgroundColor: '#FFFFFF',
+    elevation: 4,
   },
   searchIcon: { marginRight: 8 },
   searchInput: { flex: 1, height: 42, fontSize: 14, color: '#0F172A' },
@@ -3098,7 +3299,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   tagBadge: {
-    
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F8FAFC',
@@ -3362,12 +3562,59 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 2,
     paddingRight: 6,
+    gap: 6,
   },
   phoneText: {
     fontSize: 14,
     color: '#2563EB',
     fontWeight: '600',
-    marginLeft: 6,
+  },
+  secondaryPhoneText: {
+    fontSize: 13.5,
+    color: '#334155',
+    fontWeight: '600',
+  },
+  labelBadge: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginLeft: 4,
+  },
+  labelBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  secondaryPhoneRowWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F1F5F9',
+  },
+  secondaryLabelBadge: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#CBD5E1',
+  },
+  secondaryLabelBadgeText: {
+    color: '#475569',
+  },
+  secondaryActionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  secondaryIconButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   actionButtons: {
     flexDirection: 'row',

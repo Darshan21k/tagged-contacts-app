@@ -9,6 +9,7 @@ export interface Contact {
   is_search_priority?: boolean;
   created_at?: string;
   LinkedContactPhone?: string | null;
+  Phonelabels: string;
 }
 
 export interface UserProfile {

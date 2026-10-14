@@ -22,6 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import ConfettiCannon from 'react-native-confetti-cannon';
 import { supabase } from '../services/supabase';
 import { Contact, FollowupItem } from '../types';
 
@@ -97,6 +98,10 @@ export default function FollowupsScreen({ route, navigation }: any) {
   const [isCompletedFilterModalVisible, setIsCompletedFilterModalVisible] = useState(false);
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<number>>(new Set());
 
+  // Confetti Cannon Trigger State
+  const [showConfetti, setShowConfetti] = useState(false);
+  const confettiRef = useRef<any>(null);
+
   // Creation & Edit Modal state
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(Boolean(route.params?.openCreate));
   const [editingItem, setEditingItem] = useState<FollowupItem | null>(null);
@@ -129,6 +134,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
   const hourScrollRef = useRef<ScrollView>(null);
   const minuteScrollRef = useRef<ScrollView>(null);
+  const celebrateScale = useRef(new Animated.Value(1)).current;
 
   // Centered Toast State
   const [toastData, setToastData] = useState<{
@@ -154,7 +160,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
   useEffect(() => {
     navigation.setOptions({ headerShown: false });
 
-    // Request local notification permissions and set up Android channel for production/APK builds
     (async () => {
       try {
         const Notifications = require('expo-notifications');
@@ -184,6 +189,13 @@ export default function FollowupsScreen({ route, navigation }: any) {
       }
     })();
   }, [navigation]);
+
+  const triggerMilestoneCelebration = () => {
+    setShowConfetti(true);
+    setTimeout(() => {
+      confettiRef.current?.start();
+    }, 50);
+  };
 
   const showCenteredToast = useCallback(
     (actionTitle: string, schedule: string, targetName: string, noteSnippet: string) => {
@@ -281,6 +293,79 @@ export default function FollowupsScreen({ route, navigation }: any) {
     }
   }, []);
 
+  const smartSyncNotifications = async (freshFollowupsFromSupabase: FollowupItem[]) => {
+    try {
+      const Notifications = require('expo-notifications');
+      if (!Notifications || typeof Notifications.scheduleNotificationAsync !== 'function') {
+        return;
+      }
+
+      const activeFollowups = freshFollowupsFromSupabase.filter(
+        item => !item.is_completed && item.due_date && item.due_time
+      );
+
+      const currentSignature = activeFollowups
+        .map(item => `${item.id}-${item.due_date}-${item.due_time}`)
+        .sort()
+        .join(',');
+
+      const CHECK_SYNC_KEY = '@last_notification_sync_state';
+      const lastSignature = await AsyncStorage.getItem(CHECK_SYNC_KEY);
+
+      if (lastSignature === currentSignature) {
+        return;
+      }
+
+      if (typeof Notifications.cancelAllScheduledNotificationsAsync === 'function') {
+        await Notifications.cancelAllScheduledNotificationsAsync();
+      }
+
+      const schedulingPromises = activeFollowups.map(async (item) => {
+        try {
+          const dueT = item.due_time;
+          const match = dueT ? dueT.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i) : null;
+          if (!match) return;
+
+          let h = parseInt(match[1], 10);
+          const m = parseInt(match[2], 10);
+          const mer = match[3].toUpperCase();
+          if (mer === 'PM' && h < 12) h += 12;
+          if (mer === 'AM' && h === 12) h = 0;
+
+          const [y, mo, d] = item.due_date.split('-').map(Number);
+          const triggerDate = new Date(y, mo - 1, d, h, m, 0);
+
+          if (triggerDate.getTime() > Date.now()) {
+            const notifTitle = 'Follow-up Reminder ⏰';
+            const notifBody = item.type === 'task'
+              ? `Group Task: ${item.note.trim() || 'Scheduled Task'}`
+              : `Reminder: ${item.note.trim() || 'Scheduled Follow-up'}`;
+
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title: notifTitle,
+                body: notifBody,
+                sound: true,
+                data: { followupId: item.id },
+              },
+              trigger: {
+                type: Notifications.SchedulableTriggerInputTypes.DATE,
+                date: triggerDate,
+              },
+            });
+          }
+        } catch {
+          // Individual scheduling error guard
+        }
+      });
+
+      await Promise.all(schedulingPromises);
+      await AsyncStorage.setItem(CHECK_SYNC_KEY, currentSignature);
+    } catch (err) {
+      console.warn('Smart notification sync error:', err);
+    }
+  };
+
   const fetchFollowups = useCallback(async (phone: string) => {
     try {
       const { data, error } = await supabase
@@ -290,6 +375,10 @@ export default function FollowupsScreen({ route, navigation }: any) {
         .order('due_date', { ascending: true });
       if (error) throw error;
       setFollowups(data || []);
+
+      if (data) {
+        smartSyncNotifications(data);
+      }
     } catch (err: any) {
       console.warn('Failed to load followups:', err.message);
     }
@@ -443,7 +532,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
     const yesterdayStart = todayStart - oneDayMs;
     const weekStart = todayStart - 7 * oneDayMs;
     const monthStart = todayStart - 30 * oneDayMs;
-    const sixMonthsStart = todayStart - 180 * oneDayMs;
 
     const groups: { title: string; subtitle: string; data: FollowupItem[] }[] = [
       { title: 'Today', subtitle: formatToDDMMYYYY(todayStr), data: [] },
@@ -535,6 +623,13 @@ export default function FollowupsScreen({ route, navigation }: any) {
     const nextState = !item.is_completed;
     const nowIso = nextState ? new Date().toISOString() : null;
 
+    if (nextState) {
+      triggerMilestoneCelebration();
+      const contact = item.contact_id ? contactsMap.get(item.contact_id) : null;
+      const targetName = item.type === 'task' ? 'Group Task' : contact?.Name || 'Follow-up';
+      showCenteredToast('Follow-ups Completed! 🎉', formatToDDMMYYYY(item.due_date), `Completed: ${targetName}`, item.note);
+    }
+
     const nextCompletedContactIds = nextState ? item.completed_contact_ids : [];
 
     setFollowups((prev) =>
@@ -607,6 +702,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
   const handleMarkAllTaskComplete = async (item: FollowupItem, targetContacts: Contact[]) => {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    triggerMilestoneCelebration();
     const allIds = targetContacts.map((c) => c.id);
 
     setFollowups((prev) =>
@@ -752,18 +848,25 @@ export default function FollowupsScreen({ route, navigation }: any) {
     setViewingItem(item);
   };
 
-  const handleCall = (phone?: string) => {
-    if (!phone) return;
-    const clean = phone.replace(/[^0-9+]/g, '');
-    Linking.openURL(`tel:${clean}`).catch(() => Alert.alert('Error', 'Unable to initiate call.'));
+  const handleCall = (phoneNumber: string) => {
+    const cleanNumber = phoneNumber.replace(/[^0-9+]/g, '');
+    if (!cleanNumber) return;
+    Linking.openURL(`tel:${cleanNumber}`).catch(() => {
+      Alert.alert('Error', 'Unable to initiate call on this device.');
+    });
   };
 
-  const handleWhatsApp = (phone?: string) => {
-    if (!phone) return;
-    const clean = phone.replace(/[^0-9]/g, '');
-    Linking.openURL(`https://wa.me/${clean}`).catch(() =>
-      Alert.alert('Error', 'WhatsApp is not installed.')
-    );
+  const handleWhatsApp = (phoneNumber: string) => {
+    const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+    if (!cleanNumber) return;
+    const url = `https://wa.me/${cleanNumber}`;
+    Linking.canOpenURL(url).then((supported) => {
+      if (supported) {
+        Linking.openURL(url);
+      } else {
+        Alert.alert('Error', 'WhatsApp is not installed on this device.');
+      }
+    });
   };
 
   const handleNavigateWithTag = (tagName: string) => {
@@ -909,8 +1012,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
     return true;
   };
 
-  // SAFE HARDWARE LOCAL NOTIFICATION SCHEDULING LOGIC (BYPASSED IN EXPO GO)
-  const scheduleLocalNotification = async (
+  const scheduleSingleLocalNotification = async (
     dueD: string,
     dueT: string | null,
     note: string,
@@ -938,7 +1040,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
       const triggerDate = new Date(y, mo - 1, d, h, m, 0);
 
       if (triggerDate.getTime() > Date.now()) {
-        const notifTitle = `Follow-up Reminder ⏰`;
+        const notifTitle = 'Follow-up Reminder ⏰';
         const notifBody = isTaskType 
           ? `Group Task: ${note.trim() || targetName}`
           : `${targetName}: ${note.trim() || 'Scheduled Follow-up'}`;
@@ -956,8 +1058,8 @@ export default function FollowupsScreen({ route, navigation }: any) {
           },
         });
       }
-    } catch (err) {
-      // Completely swallowed so Expo Go never displays the red block error banner
+    } catch {
+      // Safe fallback guard
     }
   };
 
@@ -1041,9 +1143,8 @@ export default function FollowupsScreen({ route, navigation }: any) {
         showCenteredToast('Follow-up Scheduled', scheduleDisplay, targetDisplayName, noteText.trim());
       }
 
-      // Schedule hardware notification if time is provided
       if (isTimeEnabled && formattedTimeForStorage && savedId) {
-        await scheduleLocalNotification(
+        await scheduleSingleLocalNotification(
           dueDate,
           formattedTimeForStorage,
           noteText.trim(),
@@ -1060,6 +1161,8 @@ export default function FollowupsScreen({ route, navigation }: any) {
       setBoundTags([]);
       setIsTimeEnabled(false);
       setDueDate(new Date().toISOString().split('T')[0]);
+      
+      fetchFollowups(activePhone);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save follow-up.');
       loadData();
@@ -1104,7 +1207,22 @@ export default function FollowupsScreen({ route, navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
+    <Animated.View style={[styles.container, { transform: [{ scale: celebrateScale }] }]}>
+      {/* Confetti Cannon Effect (Blaster of Papers) */}
+      {showConfetti && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <ConfettiCannon
+            ref={confettiRef}
+            count={120}
+            origin={{ x: 200, y: 0 }}
+            autoStart={false}
+            fadeOut={true}
+            fallSpeed={2500}
+            onAnimationEnd={() => setShowConfetti(false)}
+          />
+        </View>
+      )}
+
       {/* App Header */}
       <View style={[styles.compactHeaderContainer, { paddingTop: insets.top + 6 }]}>
         <View style={styles.compactHeaderRow}>
@@ -1141,7 +1259,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
       {/* Unified Search Bar */}
       <View style={styles.searchSection}>
-        <Ionicons name="search" size={17} color="#94A3B8" style={{ marginRight: 6 }} />
+        <Ionicons name="search" size={18} color="#94A3B8" style={{ marginRight: 8 }} />
         <TextInput
           style={styles.searchInput}
           placeholder="Search note, contact, or #tag..."
@@ -1165,7 +1283,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
             }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Ionicons name="close-circle" size={17} color="#94A3B8" />
+            <Ionicons name="close-circle" size={18} color="#94A3B8" />
           </TouchableOpacity>
         )}
       </View>
@@ -1298,7 +1416,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   >
                     <Ionicons
                       name={item.is_completed ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={22}
+                      size={24}
                       color={item.is_completed ? '#10B981' : '#94A3B8'}
                     />
                   </TouchableOpacity>
@@ -1342,9 +1460,9 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   <TouchableOpacity
                     onPress={() => handleDeleteFollowup(item)}
                     hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                    style={{ marginLeft: 6 }}
+                    style={{ marginLeft: 8 }}
                   >
-                    <Ionicons name="trash-outline" size={17} color="#94A3B8" />
+                    <Ionicons name="trash-outline" size={18} color="#94A3B8" />
                   </TouchableOpacity>
                 </TouchableOpacity>
 
@@ -1368,7 +1486,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                             style={styles.taskTagPill}
                             onPress={() => handleNavigateWithTag(tg)}
                           >
-                            <Ionicons name="pricetag-outline" size={10} color="#2563EB" />
+                            <Ionicons name="pricetag-outline" size={11} color="#2563EB" />
                             <Text style={styles.taskTagPillText}>#{tg}</Text>
                           </TouchableOpacity>
                         ))}
@@ -1377,7 +1495,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
                     <View style={styles.taskToggleRow}>
                       <TouchableOpacity
-                        style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 }}
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}
                         onPress={() => toggleTaskDrawer(item.id)}
                         activeOpacity={0.7}
                       >
@@ -1398,7 +1516,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                             style={styles.markAllBtn}
                             onPress={() => handleMarkAllTaskComplete(item, targetContacts)}
                           >
-                            <Ionicons name="checkmark-done" size={12} color="#10B981" />
+                            <Ionicons name="checkmark-done" size={13} color="#10B981" />
                             <Text style={styles.markAllBtnText}>Mark All Done</Text>
                           </TouchableOpacity>
                         )}
@@ -1413,6 +1531,14 @@ export default function FollowupsScreen({ route, navigation }: any) {
                         ) : (
                           targetContacts.map((tc, tcIdx) => {
                             const isDone = completedIdsSet.has(tc.id);
+                            
+                            const numbers = (tc.Phonenumber || '').split(',').map((p) => p.trim()).filter(Boolean);
+                            const labels = ((tc as any).Phonelabels || '').split(',').map((l: string) => l.trim()).filter(Boolean);
+                            const phoneEntries = numbers.map((num, idx) => ({
+                              number: num,
+                              label: labels[idx] || 'Mobile',
+                            }));
+
                             return (
                               <View key={tc.id} style={styles.checklistItemRow}>
                                 <TouchableOpacity
@@ -1422,9 +1548,9 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                 >
                                   <Ionicons
                                     name={isDone ? 'checkbox' : 'square-outline'}
-                                    size={20}
+                                    size={22}
                                     color={isDone ? '#10B981' : '#64748B'}
-                                    style={{ marginRight: 8 }}
+                                    style={{ marginRight: 10 }}
                                   />
                                   <View style={{ flex: 1 }}>
                                     <Text
@@ -1436,24 +1562,39 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                     >
                                       {tcIdx + 1}. {tc.Name}
                                     </Text>
-                                    <Text style={styles.checklistPhoneText}>{tc.Phonenumber}</Text>
+                                    
+                                    {phoneEntries.map((entry, pIdx) => (
+                                      <View key={pIdx} style={styles.checklistPhoneRow}>
+                                        <Ionicons name="call-outline" size={14} color="#64748B" />
+                                        <Text style={styles.checklistPhoneText}>{entry.number}</Text>
+                                        {entry.label ? (
+                                          <View style={styles.checklistLabelBadge}>
+                                            <Text style={styles.checklistLabelBadgeText}>{entry.label}</Text>
+                                          </View>
+                                        ) : null}
+
+                                        <View style={{ flex: 1 }} />
+
+                                        <View style={styles.inlineChecklistActions}>
+                                          <TouchableOpacity
+                                            style={[styles.smallIconBtn, { backgroundColor: '#25D366' }]}
+                                            onPress={() => handleWhatsApp(entry.number)}
+                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                          >
+                                            <Ionicons name="logo-whatsapp" size={15} color="#FFFFFF" />
+                                          </TouchableOpacity>
+                                          <TouchableOpacity
+                                            style={[styles.smallIconBtn, { backgroundColor: '#2563EB' }]}
+                                            onPress={() => handleCall(entry.number)}
+                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                          >
+                                            <Ionicons name="call" size={14} color="#FFFFFF" />
+                                          </TouchableOpacity>
+                                        </View>
+                                      </View>
+                                    ))}
                                   </View>
                                 </TouchableOpacity>
-
-                                <View style={styles.checklistActions}>
-                                  <TouchableOpacity
-                                    style={[styles.smallIconBtn, { backgroundColor: '#25D366' }]}
-                                    onPress={() => handleWhatsApp(tc.Phonenumber)}
-                                  >
-                                    <Ionicons name="logo-whatsapp" size={14} color="#FFFFFF" />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={[styles.smallIconBtn, { backgroundColor: '#2563EB' }]}
-                                    onPress={() => handleCall(tc.Phonenumber)}
-                                  >
-                                    <Ionicons name="call" size={13} color="#FFFFFF" />
-                                  </TouchableOpacity>
-                                </View>
                               </View>
                             );
                           })
@@ -1469,7 +1610,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                       style={styles.cardActionChip}
                       onPress={() => handleWhatsApp(contact.Phonenumber)}
                     >
-                      <Ionicons name="logo-whatsapp" size={15} color="#25D366" />
+                      <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
                       <Text style={styles.cardActionChipText}>WhatsApp</Text>
                     </TouchableOpacity>
 
@@ -1477,7 +1618,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                       style={styles.cardActionChip}
                       onPress={() => handleCall(contact.Phonenumber)}
                     >
-                      <Ionicons name="call" size={14} color="#2563EB" />
+                      <Ionicons name="call" size={15} color="#2563EB" />
                       <Text style={styles.cardActionChipText}>Call</Text>
                     </TouchableOpacity>
 
@@ -1487,7 +1628,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                         navigation.navigate('EditContact', { id: contact.id, userPhone })
                       }
                     >
-                      <Ionicons name="person-outline" size={14} color="#475569" />
+                      <Ionicons name="person-outline" size={15} color="#475569" />
                       <Text style={styles.cardActionChipText}>View Contact</Text>
                     </TouchableOpacity>
                   </View>
@@ -1497,7 +1638,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
           }}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Ionicons name="notifications-off-outline" size={36} color="#CBD5E1" />
+              <Ionicons name="notifications-off-outline" size={40} color="#CBD5E1" />
               <Text style={styles.emptyTitle}>No pending follow-ups</Text>
               <Text style={styles.emptySubtext}>
                 Tap the "+ Add" button to schedule your first reminder or group task.
@@ -1638,7 +1779,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
             ]}
           >
             <View style={styles.toastSchedulePill}>
-              <Ionicons name="calendar-outline" size={13} color="#2563EB" />
+              <Ionicons name="calendar-outline" size={14} color="#2563EB" />
               <Text style={styles.toastScheduleText}>{toastData.schedule}</Text>
             </View>
 
@@ -1790,7 +1931,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
         </Pressable>
       </Modal>
 
-     {/* Create / Edit Follow-up Modal */}
+      {/* Create / Edit Follow-up Modal */}
       <Modal
         visible={isCreateModalVisible}
         transparent={true}
@@ -1806,7 +1947,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
               style={{ flex: 1, width: '100%' }}
             >
-              {/* FIXED HEADER */}
               <View style={styles.modalHeaderRow}>
                 <Text style={styles.modalTitle}>
                   {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
@@ -1816,7 +1956,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                 </TouchableOpacity>
               </View>
 
-              {/* SCROLLABLE MIDDLE SECTION */}
               <ScrollView
                 keyboardShouldPersistTaps="always"
                 showsVerticalScrollIndicator={false}
@@ -2210,7 +2349,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                 )}
               </ScrollView>
 
-              {/* FIXED FOOTER BUTTONS WITH SAFE AREA PADDING */}
               <View style={[styles.modalBtnRow, { paddingBottom: Math.max(insets.bottom, 10) }]}>
                 <TouchableOpacity
                   style={[styles.modalBtn, styles.modalCancelBtn]}
@@ -2368,7 +2506,21 @@ export default function FollowupsScreen({ route, navigation }: any) {
           </Pressable>
         </Pressable>
       </Modal>
-    </View>
+      {/* 🌟 PLACE CONFETTI HERE AT THE VERY BOTTOM SO IT BLASTS IN THE FOREGROUND 🌟 */}
+      {showConfetti && (
+        <View style={[StyleSheet.absoluteFill, { zIndex: 9999, pointerEvents: 'none' }]}>
+          <ConfettiCannon
+            ref={confettiRef}
+            count={120}
+            origin={{ x: 200, y: 0 }}
+            autoStart={false}
+            fadeOut={true}
+            fallSpeed={2500}
+            onAnimationEnd={() => setShowConfetti(false)}
+          />
+        </View>
+      )}
+    </Animated.View>
   );
 }
 
@@ -2422,10 +2574,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     elevation: 2,
     shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
   },
-  searchInput: { flex: 1, height: 40, fontSize: 13.5, color: '#0F172A' },
+  searchInput: { flex: 1, height: 42, fontSize: 14, color: '#0F172A' },
   tabsRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
@@ -2436,7 +2588,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
+    paddingVertical: 6.5,
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
@@ -2450,7 +2602,7 @@ const styles = StyleSheet.create({
     borderColor: '#FCA5A5',
   },
   tabChipText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '600',
     color: '#475569',
   },
@@ -2464,7 +2616,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    padding: 12,
+    padding: 14,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -2496,21 +2648,21 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   typeBadgeText: {
-    fontSize: 13.5,
+    fontSize: 14,
     fontWeight: '700',
     color: '#0F172A',
     flexShrink: 1,
   },
   contactTagSub: {
-    fontSize: 11.5,
+    fontSize: 12,
     color: '#64748B',
     fontWeight: '500',
     flexShrink: 1,
   },
   dueBadge: {
     backgroundColor: '#EFF6FF',
-    paddingHorizontal: 7,
-    paddingVertical: 2.5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 6,
   },
   dueBadgeOverdue: {
@@ -2520,7 +2672,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFBEB',
   },
   dueBadgeText: {
-    fontSize: 10.5,
+    fontSize: 11,
     fontWeight: '700',
     color: '#2563EB',
   },
@@ -2531,27 +2683,27 @@ const styles = StyleSheet.create({
     color: '#D97706',
   },
   noteText: {
-    fontSize: 13.5,
-    lineHeight: 19,
-    marginTop: 6,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 8,
     color: '#0F172A',
   },
   createdDateSubtext: {
-    fontSize: 10.5,
+    fontSize: 11,
     color: '#94A3B8',
-    marginTop: 4,
+    marginTop: 6,
     fontStyle: 'italic',
   },
   completedDatesSubtext: {
-    fontSize: 10.5,
+    fontSize: 11,
     color: '#94A3B8',
     marginTop: 4,
   },
   taskCohortContainer: {
     backgroundColor: '#F8FAFC',
-    borderRadius: 8,
-    padding: 8,
-    marginTop: 8,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10,
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
@@ -2566,12 +2718,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 3,
     backgroundColor: '#EFF6FF',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
     borderRadius: 6,
   },
   taskTagPillText: {
-    fontSize: 11,
+    fontSize: 11.5,
     color: '#2563EB',
     fontWeight: '700',
   },
@@ -2579,10 +2731,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 2,
+    paddingVertical: 3,
   },
   taskProgressText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '600',
     color: '#475569',
   },
@@ -2594,11 +2746,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#A7F3D0',
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 4,
     borderRadius: 6,
   },
   markAllBtnText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#059669',
   },
@@ -2606,78 +2758,102 @@ const styles = StyleSheet.create({
     marginTop: 8,
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
-    paddingTop: 6,
-    gap: 6,
+    paddingTop: 8,
+    gap: 10,
   },
   checklistItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 3,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F5F9',
   },
   checkItemClickableArea: {
     flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingVertical: 2,
   },
   checklistNameText: {
-    fontSize: 12.5,
-    fontWeight: '600',
+    fontSize: 13.5,
+    fontWeight: '700',
     color: '#1E293B',
+    marginBottom: 4,
   },
   checklistNameDone: {
     textDecorationLine: 'line-through',
     color: '#94A3B8',
   },
-  checklistPhoneText: {
-    fontSize: 11,
-    color: '#64748B',
+  checklistPhoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 5,
+    paddingVertical: 3,
   },
-  checklistActions: {
+  checklistPhoneText: {
+    fontSize: 12,
+    color: '#334155',
+    fontWeight: '600',
+  },
+  checklistLabelBadge: {
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    marginLeft: 2,
+  },
+  checklistLabelBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  inlineChecklistActions: {
     flexDirection: 'row',
     gap: 6,
-    marginLeft: 6,
   },
   smallIconBtn: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   emptyChecklistText: {
-    fontSize: 11.5,
+    fontSize: 12,
     color: '#94A3B8',
     fontStyle: 'italic',
-    paddingVertical: 4,
+    paddingVertical: 6,
   },
   cardFooterActions: {
     flexDirection: 'row',
-    gap: 6,
-    marginTop: 10,
-    paddingTop: 8,
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9',
   },
   cardActionChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
     backgroundColor: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   cardActionChipText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '600',
     color: '#475569',
   },
   completedAccordionContainer: {
-    marginTop: 14,
-    paddingTop: 12,
+    marginTop: 16,
+    paddingTop: 14,
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
   },
@@ -2685,7 +2861,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    paddingVertical: 6,
   },
   completedAccordionToggle: {
     flexDirection: 'row',
@@ -2694,7 +2870,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   completedAccordionTitle: {
-    fontSize: 13,
+    fontSize: 13.5,
     fontWeight: '700',
     color: '#64748B',
     textTransform: 'uppercase',
@@ -2703,21 +2879,21 @@ const styles = StyleSheet.create({
   completedHeaderActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   clearCompletedHeaderBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
     backgroundColor: '#FEF2F2',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     borderRadius: 6,
     borderWidth: 0.5,
     borderColor: '#FCA5A5',
   },
   clearCompletedHeaderText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#EF4444',
   },
@@ -2726,21 +2902,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#BFDBFE',
   },
   completedFilterTriggerText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#2563EB',
   },
   emptyCompletedBox: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 18,
+    paddingVertical: 20,
     gap: 6,
     backgroundColor: '#F8FAFC',
     borderRadius: 10,
@@ -2748,7 +2924,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   emptyCompletedText: {
-    fontSize: 12,
+    fontSize: 12.5,
     color: '#94A3B8',
     fontWeight: '500',
   },
@@ -2756,7 +2932,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     backgroundColor: '#F8FAFC',
     borderRadius: 10,
-    padding: 10,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
@@ -2764,18 +2940,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingBottom: 4,
+    paddingBottom: 6,
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
   },
   dateGroupTitle: {
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '700',
     color: '#1E293B',
     textTransform: 'uppercase',
   },
   dateGroupSubtitle: {
-    fontSize: 11,
+    fontSize: 11.5,
     color: '#64748B',
     fontWeight: '500',
   },
@@ -2783,39 +2959,39 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    padding: 10,
+    padding: 12,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
   completedTypeSub: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#2563EB',
-    marginBottom: 2,
+    marginBottom: 3,
   },
   completedNoteText: {
-    fontSize: 12.5,
+    fontSize: 13,
     color: '#64748B',
     textDecorationLine: 'line-through',
   },
   completedItemActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginLeft: 6,
+    gap: 8,
+    marginLeft: 8,
   },
   reopenBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 6,
     backgroundColor: '#EFF6FF',
   },
   reopenBtnText: {
-    fontSize: 11,
+    fontSize: 11.5,
     color: '#2563EB',
     fontWeight: '700',
   },
@@ -2825,20 +3001,20 @@ const styles = StyleSheet.create({
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 50,
+    paddingVertical: 60,
   },
   emptyTitle: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
     color: '#475569',
-    marginTop: 8,
+    marginTop: 10,
   },
   emptySubtext: {
-    fontSize: 12.5,
+    fontSize: 13,
     color: '#94A3B8',
     textAlign: 'center',
     paddingHorizontal: 40,
-    marginTop: 4,
+    marginTop: 6,
   },
   centeredToastBackdrop: {
     position: 'absolute',

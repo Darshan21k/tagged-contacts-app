@@ -42,7 +42,7 @@ const SLIDES = [
     navTitle: 'Add Contact',
     navIcon: 'person-add',
     title: 'Grow Your Contacts',
-    description: 'Save new connections in seconds\n\n• Use recent & mostly used tags to save time\n• Add phone number and notes',
+    description: 'Save new connections in seconds\n\n• Use recent & mostly used tags to save time\n• Add multiple phone numbers\n• Add phone number and notes',
     icon: 'add-circle',
   },
 
