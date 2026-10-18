@@ -31,6 +31,7 @@ interface ContactItem {
   Phonenumber: string;
   Phonelabels?: string;
   Tags: string;
+  PrimaryTag?: string;
 }
 
 interface PhoneEntry {
@@ -49,6 +50,8 @@ export default function HomeScreen({ navigation }: any) {
   ]);
   const [activeLabelIndex, setActiveLabelIndex] = useState<number | null>(null);
   const [tagsList, setTagsList] = useState<string[]>([]);
+  const [primaryTag, setPrimaryTag] = useState('');
+  const [isPrimaryDropdownOpen, setIsPrimaryDropdownOpen] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [linkedContacts, setLinkedContacts] = useState<LinkedContactState[]>([]);
   const [notes, setNotes] = useState('');
@@ -82,6 +85,8 @@ export default function HomeScreen({ navigation }: any) {
       setPhoneEntries([{ number: '', label: 'Mobile' }]);
       setActiveLabelIndex(null);
       setTagsList([]);
+      setPrimaryTag('');
+      setIsPrimaryDropdownOpen(false);
       setTagInput('');
       setLinkedContacts([]);
       setNotes('');
@@ -95,6 +100,17 @@ export default function HomeScreen({ navigation }: any) {
       });
     }, [userPhone])
   );
+
+  // Reactive Syncing: Auto-sync primary tag if general tags change or get deleted
+  useEffect(() => {
+    if (tagsList.length > 0) {
+      if (!primaryTag || !tagsList.includes(primaryTag)) {
+        setPrimaryTag(tagsList[0]);
+      }
+    } else {
+      setPrimaryTag('');
+    }
+  }, [tagsList]);
 
   const loadCachedTags = async (activePhone: string) => {
     try {
@@ -114,7 +130,7 @@ export default function HomeScreen({ navigation }: any) {
     try {
       const { data, error } = await supabase
         .from('Contacts_Table')
-        .select('id, Name, Phonenumber, Phonelabels, Tags')
+        .select('id, Name, Phonenumber, Phonelabels, Tags, PrimaryTag')
         .eq('Userphonenumber', activePhone)
         .order('id', { ascending: false });
 
@@ -241,7 +257,6 @@ export default function HomeScreen({ navigation }: any) {
   }, [tagInput, allContacts, phoneEntries, linkedContacts]);
 
   const handleAddPhoneField = () => {
-    // Check if the latest row is incomplete before adding a new one
     const lastEntry = phoneEntries[phoneEntries.length - 1];
     if (!lastEntry || lastEntry.number.trim().length !== 10) {
       Alert.alert('Incomplete Number', 'Please enter a valid 10-digit phone number in the current row before adding a new one.');
@@ -346,7 +361,7 @@ export default function HomeScreen({ navigation }: any) {
 
   const handleSelectContact = (contact: any) => {
     const clean10 = contact.cleanPhone || (contact.Phonenumber || '').split(',')[0].replace(/\D/g, '').slice(-10);
-    const primaryTag = contact.sortedTags && contact.sortedTags[0] ? contact.sortedTags[0] : '';
+    const pTag = contact.sortedTags && contact.sortedTags[0] ? contact.sortedTags[0] : '';
 
     if (!linkedContacts.some((c) => c.phone === clean10)) {
       setLinkedContacts((prev) => [
@@ -354,7 +369,7 @@ export default function HomeScreen({ navigation }: any) {
         {
           name: contact.Name || 'Unnamed',
           phone: clean10,
-          primaryTag: primaryTag,
+          primaryTag: pTag,
         },
       ]);
     }
@@ -372,6 +387,8 @@ export default function HomeScreen({ navigation }: any) {
 
   const handleClearAllTags = () => {
     setTagsList([]);
+    setPrimaryTag('');
+    setIsPrimaryDropdownOpen(false);
     setLinkedContacts([]);
     setTagInput('');
   };
@@ -422,7 +439,6 @@ export default function HomeScreen({ navigation }: any) {
       return;
     }
 
-    // 1. Validate all phone entries and check internal form duplicates
     const seenNumbers = new Set<string>();
     for (let i = 0; i < phoneEntries.length; i++) {
       const entry = phoneEntries[i];
@@ -465,9 +481,14 @@ export default function HomeScreen({ navigation }: any) {
       return;
     }
 
+    // Mandatory Primary Tag validation check
+    if (!primaryTag.trim()) {
+      Alert.alert('Validation Error', 'Primary Tag cannot be empty. Please select or enter a primary tag.');
+      return;
+    }
+
     setLoading(true);
     try {
-      // 2. Final database check for any of the numbers being saved
       for (const entry of validEntries) {
         const num = entry.number.trim();
         const { data: existing, error: checkError } = await supabase
@@ -504,6 +525,7 @@ export default function HomeScreen({ navigation }: any) {
           Phonenumber: numbersStr,
           Phonelabels: labelsStr,
           Tags: sanitizedTags,
+          PrimaryTag: primaryTag.trim(),
           OtherDetails: notes.trim(),
           Userphonenumber: userPhone,
           LinkedContactPhone: linkedPhonesString,
@@ -517,6 +539,8 @@ export default function HomeScreen({ navigation }: any) {
       setPhoneEntries([{ number: '', label: 'Mobile' }]);
       setActiveLabelIndex(null);
       setTagsList([]);
+      setPrimaryTag('');
+      setIsPrimaryDropdownOpen(false);
       setTagInput('');
       setLinkedContacts([]);
       setNotes('');
@@ -530,7 +554,6 @@ export default function HomeScreen({ navigation }: any) {
   };
 
   const activeTags = tagTab === 'recent' ? recentTags : mostUsedTags;
-  const dynamicBottomPadding = keyboardVisible ? 12 : Math.max(insets.bottom, 12) + 6;
 
   return (
     <KeyboardAvoidingView
@@ -720,6 +743,41 @@ export default function HomeScreen({ navigation }: any) {
               />
             </TouchableOpacity>
 
+            {/* Primary Tag Section with Auto-Suggest */}
+            <Text style={styles.label}>Primary Tag *</Text>
+            <View style={styles.primaryInputWrapper}>
+              <TextInput 
+                style={styles.input} 
+                value={primaryTag} 
+                onChangeText={(text) => {
+                  setPrimaryTag(text);
+                  setIsPrimaryDropdownOpen(true);
+                }} 
+                onFocus={() => setIsPrimaryDropdownOpen(true)} 
+                placeholder="Type or select primary tag"
+                placeholderTextColor="#94A3B8"
+              />
+
+              {isPrimaryDropdownOpen && tagsList.length > 0 && (
+                <View style={styles.autoSuggestDropdown}>
+                  {tagsList
+                    .filter((tag) => tag.toLowerCase().includes(primaryTag.toLowerCase()))
+                    .map((tag) => (
+                      <TouchableOpacity
+                        key={tag}
+                        style={styles.autoSuggestItem}
+                        onPress={() => {
+                          setPrimaryTag(tag);
+                          setIsPrimaryDropdownOpen(false);
+                        }}
+                      >
+                        <Text style={styles.autoSuggestItemText}>{tag}</Text>
+                      </TouchableOpacity>
+                    ))}
+                </View>
+              )}
+            </View>
+
             {(tagSuggestions.length > 0 || contactSuggestions.length > 0) && (
               <View style={styles.suggestionsDropdownContainer}>
                 <ScrollView
@@ -882,8 +940,8 @@ export default function HomeScreen({ navigation }: any) {
         </View>
       </ScrollView>
 
-      {/* Pinned Action Bar */}
-      <View style={[styles.bottomBar, { paddingBottom: dynamicBottomPadding }]}>
+      {/* Clean Bottom Action Bar Without Unwanted Card Background */}
+      <View style={styles.bottomBar}>
         <TouchableOpacity
           style={styles.saveButton}
           onPress={handleSaveContact}
@@ -903,7 +961,7 @@ export default function HomeScreen({ navigation }: any) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F1F5F9' },
-  scrollContent: { padding: 16, paddingBottom: 32 },
+  scrollContent: { padding: 16, paddingBottom: 16 },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
@@ -1272,10 +1330,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   suggestionChipText: { fontSize: 12, color: '#3730A3', fontWeight: '600' },
+  
+  // Fixed Bottom Bar Styling
   bottomBar: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 10,
+    paddingBottom: 10, // Slim fixed padding to remove all leftover white space
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
     elevation: 8,
@@ -1292,4 +1353,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   saveButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+
+  primaryInputWrapper: {
+    position: 'relative',
+    zIndex: 20,
+  },
+  autoSuggestDropdown: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    zIndex: 100,
+  },
+  autoSuggestItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  autoSuggestItemText: {
+    fontSize: 14,
+    color: '#334155',
+    fontWeight: '500',
+  },
 });

@@ -151,6 +151,12 @@ const ContactCard = React.memo(
           if (!linkedContact) return null;
 
           const linkedName = linkedContact.Name || 'Contact';
+          
+          // Get primary tag directly from the database column, with a fallback to the first general tag
+          const linkedPrimaryTag = (linkedContact as any).PrimaryTag || (
+            linkedContact.Tags ? linkedContact.Tags.split(',')[0]?.trim() : ''
+          );
+
           const linkedTags = linkedContact.Tags
             ? linkedContact.Tags.split(',').map((t) => t.trim()).filter(Boolean)
             : [];
@@ -170,7 +176,7 @@ const ContactCard = React.memo(
           }
 
           return {
-            name: linkedName,
+            name: `${linkedName}${linkedPrimaryTag ? ` (${linkedPrimaryTag})` : ''}`,
             phone: lPhone,
             matchedTag,
             matchedName,
@@ -185,6 +191,7 @@ const ContactCard = React.memo(
       const contactName = (item.Name || '').toLowerCase();
       const contactPhone = item.Phonenumber || '';
       const contactTags = (item.Tags || '').toLowerCase();
+      const contactPrimaryTag = ((item as any).PrimaryTag || '').toLowerCase();
       const contactDetails = (item.OtherDetails || '').toLowerCase();
 
       const fullMatch = activeTerms.every(
@@ -192,6 +199,7 @@ const ContactCard = React.memo(
           contactName.includes(t) ||
           contactPhone.includes(t) ||
           contactTags.includes(t) ||
+          contactPrimaryTag.includes(t) ||
           contactDetails.includes(t)
       );
 
@@ -199,11 +207,12 @@ const ContactCard = React.memo(
         (t) =>
           contactName.includes(t) ||
           contactPhone.includes(t) ||
-          contactTags.includes(t)
+          contactTags.includes(t) ||
+          contactPrimaryTag.includes(t)
       );
 
       return fullMatch && !matchedPrimaries && contactDetails.length > 0;
-    }, [activeTerms, item.Name, item.Phonenumber, item.Tags, item.OtherDetails]);
+    }, [activeTerms, item.Name, item.Phonenumber, item.Tags, (item as any).PrimaryTag, item.OtherDetails]);
 
     const renderRightActions = (
       _progress: Animated.AnimatedInterpolation<number>,
@@ -340,6 +349,20 @@ const ContactCard = React.memo(
                     </View>
                   )}
                 </View>
+
+                {/* Clean Primary Tag Placement Directly Below Name (Fetched explicitly from Database PrimaryTag) */}
+                {((item as any).PrimaryTag || (tagList.length > 0 ? tagList[0] : '')) ? (
+                  <TouchableOpacity
+                    onPress={() => onTagPress((item as any).PrimaryTag || tagList[0])}
+                    activeOpacity={0.7}
+                    disabled={isSelectionMode}
+                    style={styles.primaryTagTouchable}
+                  >
+                    <Text style={styles.primaryTagText}>
+                      {(item as any).PrimaryTag || tagList[0]}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
 
                 {/* Primary Phone Row */}
                 {phoneEntries.length > 0 && (
@@ -553,8 +576,6 @@ export default function ContactsScreen({ navigation, route }: any) {
     }, [])
   );
 
-  
-
   const activeTerms = useMemo(() => {
     const q = (searchQuery || '').trim().toLowerCase();
     if (!q) return [];
@@ -731,7 +752,6 @@ export default function ContactsScreen({ navigation, route }: any) {
             .eq('Userphonenumber', activePhone)
             .ilike('Tagname', orphan);
         }
-        // Refresh your pinned tags state immediately after cleanup
         fetchPinnedTags(activePhone);
       }
     } catch (err) {
@@ -755,6 +775,88 @@ export default function ContactsScreen({ navigation, route }: any) {
     }
   }, [userPhone]);
 
+  const smartSyncNotifications = async (freshFollowupsFromSupabase: FollowupItem[]) => {
+    try {
+      const Notifications = require('expo-notifications');
+      if (!Notifications || typeof Notifications.scheduleNotificationAsync !== 'function') {
+        return;
+      }
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const activeFollowups = freshFollowupsFromSupabase.filter(
+        item => !item.is_completed && item.due_date
+      );
+
+      const currentSignature = activeFollowups
+        .map(item => `${item.id}-${item.due_date}-${item.due_time || '09:00 AM'}`)
+        .sort()
+        .join(',');
+
+      const CHECK_SYNC_KEY = '@last_notification_sync_state';
+      const lastSignature = await AsyncStorage.getItem(CHECK_SYNC_KEY);
+
+      if (lastSignature === currentSignature) {
+        return;
+      }
+
+      if (typeof Notifications.cancelAllScheduledNotificationsAsync === 'function') {
+        await Notifications.cancelAllScheduledNotificationsAsync();
+      }
+
+      const schedulingPromises = activeFollowups.map(async (item) => {
+        try {
+          const dueD = item.due_date;
+          const dueT = item.due_time || '09:00 AM';
+          
+          const match = dueT.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+          if (!match) return;
+
+          let h = parseInt(match[1], 10);
+          const m = parseInt(match[2], 10);
+          const mer = match[3].toUpperCase();
+          if (mer === 'PM' && h < 12) h += 12;
+          if (mer === 'AM' && h === 12) h = 0;
+
+          const [y, mo, d] = dueD.split('-').map(Number);
+          let triggerDate = new Date(y, mo - 1, d, h, m, 0);
+
+          if (triggerDate.getTime() <= Date.now()) {
+            const now = new Date();
+            triggerDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+            if (triggerDate.getTime() <= Date.now()) {
+              triggerDate.setDate(triggerDate.getDate() + 1);
+            }
+          }
+
+          const notifTitle = dueD < todayStr ? 'Overdue Follow-up Reminder ⚠️' : 'Follow-up Reminder ⏰';
+          const notifBody = item.type === 'task'
+            ? `Group Task: ${item.note.trim() || 'Scheduled Task'}`
+            : `Reminder: ${item.note.trim() || 'Scheduled Follow-up'}`;
+
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: notifTitle,
+              body: notifBody,
+              sound: true,
+              data: { followupId: item.id },
+            },
+            trigger: {
+              type: Notifications.SchedulableTriggerInputTypes.DATE,
+              date: triggerDate,
+            },
+          });
+        } catch {
+          // Individual scheduling error guard
+        }
+      });
+
+      await Promise.all(schedulingPromises);
+      await AsyncStorage.setItem(CHECK_SYNC_KEY, currentSignature);
+    } catch (err) {
+      console.warn('Smart notification sync error:', err);
+    }
+  };
+
   const fetchFollowupsData = useCallback(async (phoneOverride?: string) => {
     try {
       const activePhone = phoneOverride || (await AsyncStorage.getItem('user_phone')) || userPhone;
@@ -766,6 +868,10 @@ export default function ContactsScreen({ navigation, route }: any) {
 
       if (error) throw error;
       setActiveFollowups(data || []);
+
+      if (data) {
+        smartSyncNotifications(data);
+      }
     } catch (err: any) {
       console.warn('Failed to load active followups:', err.message);
     }
@@ -842,7 +948,7 @@ export default function ContactsScreen({ navigation, route }: any) {
       return () => {
         isMounted = false;
       };
-    }, [userPhone, fetchPinnedTags, fetchContactsData, fetchFollowupsData, allContacts.length])
+    }, [userPhone, fetchPinnedTags, fetchContactsData, fetchFollowupsData, allContacts.length, cleanupOrphanedPinnedTags])
   );
 
   const handlePullRefresh = useCallback(async () => {
@@ -1190,6 +1296,9 @@ export default function ContactsScreen({ navigation, route }: any) {
           if (currentItemTags.includes(tagLower)) return true;
         }
 
+        const primaryTagVal = ((c as any).PrimaryTag || '').trim().toLowerCase();
+        if (primaryTagVal === tagLower) return true;
+
         const contactNameLower = (c.Name || '').toLowerCase();
         const contactCleanPhone = (c.Phonenumber || '').replace(/\D/g, '').slice(-10);
         if (contactNameLower === tagLower) return true;
@@ -1243,6 +1352,7 @@ export default function ContactsScreen({ navigation, route }: any) {
         .map((c) => {
           const contactName = (c.Name || '').toLowerCase();
           const contactPhone = c.Phonenumber || '';
+          const contactPrimaryTag = ((c as any).PrimaryTag || '').toLowerCase();
           const contactDetails = (c.OtherDetails || '').toLowerCase();
           const contactCleanPhone = contactPhone.replace(/\D/g, '').slice(-10);
 
@@ -1283,14 +1393,16 @@ export default function ContactsScreen({ navigation, route }: any) {
 
           let nameMatch = searchWords.every((word) => contactName.includes(word) || linkedNames.some(ln => ln.includes(word)));
           let phoneMatch = searchWords.every((word) => contactPhone.includes(word));
+          let primaryTagMatch = searchWords.every((word) => contactPrimaryTag.includes(word));
           let notesMatch = searchWords.every((word) => contactDetails.includes(word));
 
           let exactTagMatchCount = 0;
           let allWordsFoundInTags = searchWords.every((word) => 
-            rawTags.some((tag) => tag.includes(word)) || linkedTags.some((lt) => lt.includes(word))
+            contactPrimaryTag.includes(word) || rawTags.some((tag) => tag.includes(word)) || linkedTags.some((lt) => lt.includes(word))
           );
 
           searchWords.forEach((word) => {
+            if (contactPrimaryTag.includes(word)) exactTagMatchCount++;
             rawTags.forEach((tag) => {
               if (tag === word) {
                 exactTagMatchCount++;
@@ -1301,7 +1413,7 @@ export default function ContactsScreen({ navigation, route }: any) {
             });
           });
 
-          const isPrimaryMatch = nameMatch || phoneMatch || allWordsFoundInTags;
+          const isPrimaryMatch = nameMatch || phoneMatch || primaryTagMatch || allWordsFoundInTags;
           let isRelevant = isPrimaryMatch || notesMatch;
 
           return {
@@ -3537,6 +3649,22 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     maxWidth: '65%',
   },
+  primaryTagTouchable: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    marginBottom: 2,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  primaryTagText: {
+    fontSize: 12.50,
+    fontWeight: '700',
+    color: '#2255df',
+  },
   noteMatchBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3939,7 +4067,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   modalPreviewTagPill: {
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#F8FAFC',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,

@@ -25,6 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 import ConfettiCannon from 'react-native-confetti-cannon';
 import { supabase } from '../services/supabase';
 import { Contact, FollowupItem } from '../types';
+import { useFocusEffect } from '@react-navigation/native';
 
 type TabType = 'all' | 'overdue' | 'today' | 'upcoming';
 type CompletedFilterType = 'all' | 'today' | 'yesterday' | 'week' | 'month' | '6months';
@@ -300,12 +301,13 @@ export default function FollowupsScreen({ route, navigation }: any) {
         return;
       }
 
+      // Include both future reminders and overdue uncompleted reminders
       const activeFollowups = freshFollowupsFromSupabase.filter(
-        item => !item.is_completed && item.due_date && item.due_time
+        item => !item.is_completed && item.due_date
       );
 
       const currentSignature = activeFollowups
-        .map(item => `${item.id}-${item.due_date}-${item.due_time}`)
+        .map(item => `${item.id}-${item.due_date}-${item.due_time || '09:00 AM'}`)
         .sort()
         .join(',');
 
@@ -322,8 +324,10 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
       const schedulingPromises = activeFollowups.map(async (item) => {
         try {
-          const dueT = item.due_time;
-          const match = dueT ? dueT.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i) : null;
+          const dueD = item.due_date;
+          const dueT = item.due_time || '09:00 AM'; // Default time if none specified for overdue items
+          
+          const match = dueT.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
           if (!match) return;
 
           let h = parseInt(match[1], 10);
@@ -332,28 +336,36 @@ export default function FollowupsScreen({ route, navigation }: any) {
           if (mer === 'PM' && h < 12) h += 12;
           if (mer === 'AM' && h === 12) h = 0;
 
-          const [y, mo, d] = item.due_date.split('-').map(Number);
-          const triggerDate = new Date(y, mo - 1, d, h, m, 0);
+          const [y, mo, d] = dueD.split('-').map(Number);
+          let triggerDate = new Date(y, mo - 1, d, h, m, 0);
 
-          if (triggerDate.getTime() > Date.now()) {
-            const notifTitle = 'Follow-up Reminder ⏰';
-            const notifBody = item.type === 'task'
-              ? `Group Task: ${item.note.trim() || 'Scheduled Task'}`
-              : `Reminder: ${item.note.trim() || 'Scheduled Follow-up'}`;
-
-            await Notifications.scheduleNotificationAsync({
-              content: {
-                title: notifTitle,
-                body: notifBody,
-                sound: true,
-                data: { followupId: item.id },
-              },
-              trigger: {
-                type: Notifications.SchedulableTriggerInputTypes.DATE,
-                date: triggerDate,
-              },
-            });
+          // If the due date is in the past (Overdue), set it for the next upcoming occurrence (e.g., 9:00 AM today/tomorrow)
+          if (triggerDate.getTime() <= Date.now()) {
+            const now = new Date();
+            triggerDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+            if (triggerDate.getTime() <= Date.now()) {
+              // If today's time has already passed, schedule for tomorrow morning so it triggers daily
+              triggerDate.setDate(triggerDate.getDate() + 1);
+            }
           }
+
+          const notifTitle = dueD < todayStr ? 'Overdue Follow-up Reminder ⚠️' : 'Follow-up Reminder ⏰';
+          const notifBody = item.type === 'task'
+            ? `Group Task: ${item.note.trim() || 'Scheduled Task'}`
+            : `Reminder: ${item.note.trim() || 'Scheduled Follow-up'}`;
+
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: notifTitle,
+              body: notifBody,
+              sound: true,
+              data: { followupId: item.id },
+            },
+            trigger: {
+              type: Notifications.SchedulableTriggerInputTypes.DATE,
+              date: triggerDate,
+            },
+          });
         } catch {
           // Individual scheduling error guard
         }
@@ -384,22 +396,24 @@ export default function FollowupsScreen({ route, navigation }: any) {
     }
   }, []);
 
-  const loadData = useCallback(async () => {
+ const loadData = useCallback(async () => {
     const storedPhone = (await AsyncStorage.getItem('user_phone')) || userPhone;
     await Promise.all([fetchContacts(storedPhone), fetchFollowups(storedPhone)]);
   }, [userPhone, fetchContacts, fetchFollowups]);
 
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      setLoading(true);
-      await loadData();
-      if (isMounted) setLoading(false);
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      let isMounted = true;
+      (async () => {
+        setLoading(true);
+        await loadData();
+        if (isMounted) setLoading(false);
+      })();
+      return () => {
+        isMounted = false;
+      };
+    }, [loadData])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -909,15 +923,17 @@ export default function FollowupsScreen({ route, navigation }: any) {
     
     const lastAt = textUpToCursor.lastIndexOf('@');
     const lastHash = textUpToCursor.lastIndexOf('#');
-    const lastSpace = textUpToCursor.lastIndexOf(' ');
     const lastNewline = textUpToCursor.lastIndexOf('\n');
-    const delimiterIndex = Math.max(lastSpace, lastNewline);
+    
+    // For contacts (@), space acts as a delimiter. For tags (#), we allow spaces for multi-word tags up to the next newline.
+    const contactDelimiter = Math.max(textUpToCursor.lastIndexOf(' '), lastNewline);
 
-    if (lastAt !== -1 && lastAt > delimiterIndex && (lastHash === -1 || lastAt > lastHash)) {
+    if (lastAt !== -1 && lastAt > contactDelimiter && (lastHash === -1 || lastAt > lastHash)) {
       setSuggestionMode('contact');
       setSuggestionQuery(textUpToCursor.substring(lastAt + 1).toLowerCase());
-    } else if (lastHash !== -1 && lastHash > delimiterIndex && (lastAt === -1 || lastHash > lastAt)) {
+    } else if (lastHash !== -1 && lastHash > lastNewline && (lastAt === -1 || lastHash > lastAt)) {
       setSuggestionMode('tag');
+      // Capture everything after the # up to the cursor, allowing spaces for multi-word tags like "RR Nagar"
       setSuggestionQuery(textUpToCursor.substring(lastHash + 1).toLowerCase());
     } else {
       setSuggestionMode(null);
@@ -963,9 +979,12 @@ export default function FollowupsScreen({ route, navigation }: any) {
     const before = noteText.substring(0, pos);
     const after = noteText.substring(pos);
     const lastHash = before.lastIndexOf('#');
+    
     if (lastHash !== -1) {
       const base = before.substring(0, lastHash);
-      setNoteText(base + after);
+      // Replace the typed query with the clean official tag name
+      const newText = base + after;
+      setNoteText(newText);
       const newPos = base.length;
       setSelection({ start: newPos, end: newPos });
     }
@@ -974,7 +993,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
     setSuggestionQuery('');
     noteInputRef.current?.focus();
   };
-
   const handleRemoveBoundContact = (contactId: number) => {
     Haptics.selectionAsync().catch(() => {});
     setBoundContacts((prev) => prev.filter((c) => c.id !== contactId));
@@ -1422,15 +1440,20 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   </TouchableOpacity>
 
                   <View style={styles.cardHeaderCenter}>
-                    <View style={styles.nameRow}>
+                    <View style={styles.cardHeaderNameColumn}>
                       <Text style={styles.typeBadgeText} numberOfLines={1}>
                         {isTask ? '🏷️ GROUP TASK' : `👤 ${contact?.Name || 'Contact'}`}
                       </Text>
-                      {contact?.Tags && !isTask && (
-                        <Text style={styles.contactTagSub} numberOfLines={1}>
-                          ({contact.Tags.split(',')[0].trim()})
-                        </Text>
-                      )}
+                      {contact && !isTask && (() => {
+                        const contactPrimaryTag = (contact as any).PrimaryTag || (contact.Tags ? contact.Tags.split(',')[0].trim() : '');
+                        return contactPrimaryTag ? (
+                          <View style={styles.checklistPrimaryTagTouchable}>
+                            <Text style={styles.checklistPrimaryTagText}>
+                              {contactPrimaryTag}
+                            </Text>
+                          </View>
+                        ) : null;
+                      })()}
                     </View>
                   </View>
 
@@ -1540,19 +1563,20 @@ export default function FollowupsScreen({ route, navigation }: any) {
                             }));
 
                             return (
-                              <View key={tc.id} style={styles.checklistItemRow}>
-                                <TouchableOpacity
-                                  style={styles.checkItemClickableArea}
-                                  activeOpacity={0.7}
-                                  onPress={() => handleToggleTaskContact(item, tc.id)}
-                                >
-                                  <Ionicons
-                                    name={isDone ? 'checkbox' : 'square-outline'}
-                                    size={22}
-                                    color={isDone ? '#10B981' : '#64748B'}
-                                    style={{ marginRight: 10 }}
-                                  />
-                                  <View style={{ flex: 1 }}>
+              <View key={tc.id} style={styles.checklistItemRow}>
+                <TouchableOpacity
+                  style={styles.checkItemClickableArea}
+                  activeOpacity={0.7}
+                  onPress={() => handleToggleTaskContact(item, tc.id)}
+                >
+                  <Ionicons
+                    name={isDone ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={isDone ? '#10B981' : '#64748B'}
+                    style={{ marginRight: 10 }}
+                  />
+                 <View style={{ flex: 1 }}>
+                                    {/* Contact Name */}
                                     <Text
                                       style={[
                                         styles.checklistNameText,
@@ -1562,6 +1586,18 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                     >
                                       {tcIdx + 1}. {tc.Name}
                                     </Text>
+                                    
+                                    {/* Primary Tag Placed Cleanly Directly Below Name */}
+                                    {(() => {
+                                      const contactPrimaryTag = (tc as any).PrimaryTag || (tc.Tags ? tc.Tags.split(',')[0].trim() : '');
+                                      return contactPrimaryTag ? (
+                                        <View style={styles.checklistPrimaryTagTouchable}>
+                                          <Text style={styles.checklistPrimaryTagText}>
+                                            {contactPrimaryTag}
+                                          </Text>
+                                        </View>
+                                      ) : null;
+                                    })()}
                                     
                                     {phoneEntries.map((entry, pIdx) => (
                                       <View key={pIdx} style={styles.checklistPhoneRow}>
@@ -1581,14 +1617,14 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                             onPress={() => handleWhatsApp(entry.number)}
                                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                           >
-                                            <Ionicons name="logo-whatsapp" size={15} color="#FFFFFF" />
+                                            <Ionicons name="logo-whatsapp" size={19} color="#FFFFFF" />
                                           </TouchableOpacity>
                                           <TouchableOpacity
                                             style={[styles.smallIconBtn, { backgroundColor: '#2563EB' }]}
                                             onPress={() => handleCall(entry.number)}
                                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                           >
-                                            <Ionicons name="call" size={14} color="#FFFFFF" />
+                                            <Ionicons name="call" size={18} color="#FFFFFF" />
                                           </TouchableOpacity>
                                         </View>
                                       </View>
@@ -1861,7 +1897,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                       {viewingItem.linked_contact_ids.map((id) => {
                         const c = contactsMap.get(id);
                         if (!c) return null;
-                        const primaryTag = c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag';
+                        const primaryTag = (c as any).PrimaryTag || (c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag');
                         return (
                           <View key={c.id} style={[styles.contactPickerChip, styles.contactPickerChipActive]}>
                             <Ionicons name="person-circle" size={14} color="#FFFFFF" />
@@ -1933,35 +1969,36 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
       {/* Create / Edit Follow-up Modal */}
       <Modal
-        visible={isCreateModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setIsCreateModalVisible(false)}
+  visible={isCreateModalVisible}
+  transparent={true}
+  animationType="slide"
+  onRequestClose={() => setIsCreateModalVisible(false)}
+>
+  <Pressable
+    style={styles.modalOverlay}
+    onPress={() => setIsCreateModalVisible(false)}
+  >
+    <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1, width: '100%' }}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setIsCreateModalVisible(false)}
-        >
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={{ flex: 1, width: '100%' }}
-            >
-              <View style={styles.modalHeaderRow}>
-                <Text style={styles.modalTitle}>
-                  {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
-                </Text>
-                <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
-                  <Ionicons name="close" size={22} color="#64748B" />
-                </TouchableOpacity>
-              </View>
+        <View style={styles.modalHeaderRow}>
+          <Text style={styles.modalTitle}>
+            {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
+          </Text>
+          <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
+            <Ionicons name="close" size={22} color="#64748B" />
+          </TouchableOpacity>
+        </View>
 
-              <ScrollView
-                keyboardShouldPersistTaps="always"
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: 16 }}
-                style={{ flex: 1 }}
-              >
+        <ScrollView
+          keyboardShouldPersistTaps="always"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 40 }}
+          style={{ flex: 1 }}
+        >
                 <View style={styles.typeSelectorRow}>
                   <TouchableOpacity
                     style={[styles.typeBtn, createType === 'contact' && styles.typeBtnActive]}
@@ -2014,7 +2051,10 @@ export default function FollowupsScreen({ route, navigation }: any) {
                         <Text style={{ fontWeight: '700', color: '#0F172A' }}>
                           {selectedContact.Name}
                         </Text>
-                        {selectedContact.Tags ? ` (${selectedContact.Tags.split(',')[0].trim()})` : ''}
+                        {(() => {
+                          const primaryTag = (selectedContact as any).PrimaryTag || (selectedContact.Tags ? selectedContact.Tags.split(',')[0].trim() : '');
+                          return primaryTag ? ` (${primaryTag})` : '';
+                        })()}
                       </Text>
                     </View>
                   </View>
@@ -2028,7 +2068,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={{ marginTop: 4 }}>
                       {boundContacts.map((c) => {
                         const isChosen = createType === 'contact' && selectedContact?.id === c.id;
-                        const primaryTag = c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag';
+                        const primaryTag = (c as any).PrimaryTag || (c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag');
                         return (
                           <TouchableOpacity
                             key={c.id}
@@ -2146,49 +2186,50 @@ export default function FollowupsScreen({ route, navigation }: any) {
                 </View>
 
                 {suggestionMode && (
-                  <View style={styles.suggestionsContainer}>
-                    <ScrollView
-                      horizontal
-                      keyboardShouldPersistTaps="always"
-                      showsHorizontalScrollIndicator={false}
-                    >
-                      {suggestionMode === 'contact' &&
-                        allContacts
-                          .filter((c) => c.Name.toLowerCase().includes(suggestionQuery))
-                          .slice(0, 10)
-                          .map((c) => {
-                            const primaryTag = c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag';
-                            return (
-                              <TouchableOpacity
-                                key={c.id}
-                                style={styles.sugChip}
-                                onPress={() => handleSelectContactSuggestion(c)}
-                              >
-                                <Ionicons name="person-circle-outline" size={14} color="#2563EB" />
-                                <Text style={styles.sugChipText}>
-                                  {c.Name} ({primaryTag})
-                                </Text>
-                              </TouchableOpacity>
-                            );
-                          })}
+  <View style={styles.floatingSuggestionsContainer}>
+    <ScrollView
+      horizontal
+      keyboardShouldPersistTaps="always"
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap: 6, paddingHorizontal: 4 }}
+    >
+      {suggestionMode === 'contact' &&
+        allContacts
+          .filter((c) => c.Name.toLowerCase().includes(suggestionQuery))
+          .slice(0, 10)
+          .map((c) => {
+            const primaryTag = (c as any).PrimaryTag || (c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag');
+            return (
+              <TouchableOpacity
+                key={c.id}
+                style={styles.sugChip}
+                onPress={() => handleSelectContactSuggestion(c)}
+              >
+                <Ionicons name="person-circle-outline" size={14} color="#2563EB" />
+                <Text style={styles.sugChipText}>
+                  {c.Name} ({primaryTag})
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
 
-                      {suggestionMode === 'tag' &&
-                        availableTags
-                          .filter((t) => t.toLowerCase().includes(suggestionQuery))
-                          .slice(0, 10)
-                          .map((tg, idx) => (
-                            <TouchableOpacity
-                              key={idx}
-                              style={styles.sugChip}
-                              onPress={() => handleSelectTagSuggestion(tg)}
-                            >
-                              <Ionicons name="pricetag-outline" size={12} color="#2563EB" />
-                              <Text style={styles.sugChipText}>#{tg}</Text>
-                            </TouchableOpacity>
-                          ))}
-                    </ScrollView>
-                  </View>
-                )}
+      {suggestionMode === 'tag' &&
+        availableTags
+          .filter((t) => t.toLowerCase().includes(suggestionQuery))
+          .slice(0, 10)
+          .map((tg, idx) => (
+            <TouchableOpacity
+              key={idx}
+              style={styles.sugChip}
+              onPress={() => handleSelectTagSuggestion(tg)}
+            >
+              <Ionicons name="pricetag-outline" size={12} color="#2563EB" />
+              <Text style={styles.sugChipText}>#{tg}</Text>
+            </TouchableOpacity>
+          ))}
+    </ScrollView>
+  </View>
+)}
 
                 <Text style={styles.fieldLabel}>Due Date:</Text>
                 <View style={styles.quickDateRow}>
@@ -2349,7 +2390,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                 )}
               </ScrollView>
 
-              <View style={[styles.modalBtnRow, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+             <View style={styles.modalBtnRow}>
                 <TouchableOpacity
                   style={[styles.modalBtn, styles.modalCancelBtn]}
                   onPress={() => setIsCreateModalVisible(false)}
@@ -2774,8 +2815,8 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     paddingVertical: 2,
   },
-  checklistNameText: {
-    fontSize: 13.5,
+ checklistNameText: {
+    fontSize: 14,          // Increased from 13.5 to 15 for a prominent contact name
     fontWeight: '700',
     color: '#1E293B',
     marginBottom: 4,
@@ -2788,11 +2829,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 5,
-    paddingVertical: 3,
-  },
+      },
   checklistPhoneText: {
-    fontSize: 12,
+    fontSize: 13.5,
     color: '#334155',
     fontWeight: '600',
   },
@@ -2806,7 +2845,7 @@ const styles = StyleSheet.create({
     marginLeft: 2,
   },
   checklistLabelBadgeText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     color: '#475569',
   },
@@ -2814,10 +2853,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
   },
-  smallIconBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+ smallIconBtn: {
+    width: 34,      // Increased from 28 to 34
+    height: 34,     // Increased from 28 to 34
+    borderRadius: 17, // Half of 34 for a perfect circle
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3097,8 +3136,9 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     padding: 20,
+    paddingBottom: 10,
     width: '100%',
-    height: '80%',
+    height: '86%',
     elevation: 10,
     flexShrink: 1,
   },
@@ -3450,7 +3490,8 @@ const styles = StyleSheet.create({
   modalBtnRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 12,
+    marginTop: 8,            
+    marginBottom: 4,
   },
   modalBtn: {
     flex: 1,
@@ -3605,5 +3646,56 @@ const styles = StyleSheet.create({
   filterOptionLabelSelected: {
     color: '#2563EB',
     fontWeight: '800',
+  },
+
+  checklistNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 4,
+  },
+  checklistPrimaryTagBadge: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  
+  checklistPrimaryTagTouchable: {
+    alignSelf: 'flex-start',
+    marginTop: 1,
+    marginBottom: 4,
+    backgroundColor: '#FFFFFF', // Clean white background against the checklist card
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#c4cad7',     // Solid black/dark border to match checklist UI theme
+  },
+  checklistPrimaryTagText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#4a4d53',         // Solid black text color
+  },
+  floatingSuggestionsContainer: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 8,
+    padding: 6,
+    marginBottom: 8,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  cardHeaderNameColumn: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 2,
   },
 });

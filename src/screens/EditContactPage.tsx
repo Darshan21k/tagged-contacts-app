@@ -29,6 +29,7 @@ interface ContactItem {
   Phonenumber: string;
   Phonelabels?: string;
   Tags: string;
+  PrimaryTag?: string;
 }
 
 interface PhoneEntry {
@@ -48,6 +49,8 @@ export default function EditContactPage({ route, navigation }: any) {
   ]);
   const [activeLabelIndex, setActiveLabelIndex] = useState<number | null>(null);
   const [tagsList, setTagsList] = useState<string[]>([]);
+  const [primaryTag, setPrimaryTag] = useState('');
+  const [isPrimaryDropdownOpen, setIsPrimaryDropdownOpen] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [linkedContacts, setLinkedContacts] = useState<LinkedContactState[]>([]);
   const [notes, setNotes] = useState('');
@@ -113,6 +116,17 @@ export default function EditContactPage({ route, navigation }: any) {
     loadContact();
   }, [id]);
 
+  // Reactive Syncing: Auto-sync primary tag if general tags change or get deleted
+  useEffect(() => {
+    if (tagsList.length > 0) {
+      if (!primaryTag || !tagsList.includes(primaryTag)) {
+        setPrimaryTag(tagsList[0]);
+      }
+    } else {
+      setPrimaryTag('');
+    }
+  }, [tagsList]);
+
   const loadCachedTags = async (activePhone: string) => {
     try {
       const cached = await AsyncStorage.getItem(`cached_tags_${activePhone}`);
@@ -131,7 +145,7 @@ export default function EditContactPage({ route, navigation }: any) {
     try {
       const { data, error } = await supabase
         .from('Contacts_Table')
-        .select('id, Name, Phonenumber, Phonelabels, Tags')
+        .select('id, Name, Phonenumber, Phonelabels, Tags, PrimaryTag')
         .eq('Userphonenumber', activePhone)
         .order('id', { ascending: false });
 
@@ -208,6 +222,7 @@ export default function EditContactPage({ route, navigation }: any) {
       if (data) {
         setName(data.Name || '');
         setNotes(data.OtherDetails || '');
+        setPrimaryTag(data.PrimaryTag || '');
 
         const numbers = (data.Phonenumber || '').split(',').map((p: string) => p.trim()).filter(Boolean);
         const labels = (data.Phonelabels || '').split(',').map((l: string) => l.trim()).filter(Boolean);
@@ -241,7 +256,7 @@ export default function EditContactPage({ route, navigation }: any) {
 
           const { data: contactsData } = await supabase
             .from('Contacts_Table')
-            .select('id, Name, Phonenumber, Phonelabels, Tags')
+            .select('id, Name, Phonenumber, Phonelabels, Tags, PrimaryTag')
             .eq('Userphonenumber', activeUser);
 
           if (contactsData) {
@@ -256,7 +271,7 @@ export default function EditContactPage({ route, navigation }: any) {
               return {
                 name: matched?.Name || 'Linked Contact',
                 phone: lPhone,
-                primaryTag: tagsArray[0] || '',
+                primaryTag: matched?.PrimaryTag || tagsArray[0] || '',
               };
             });
             setLinkedContacts(resolved);
@@ -413,7 +428,7 @@ export default function EditContactPage({ route, navigation }: any) {
 
   const handleSelectContact = (contact: any) => {
     const clean10 = contact.cleanPhone || (contact.Phonenumber || '').split(',')[0].replace(/\D/g, '').slice(-10);
-    const primaryTag = contact.sortedTags && contact.sortedTags[0] ? contact.sortedTags[0] : '';
+    const pTag = contact.PrimaryTag || (contact.sortedTags && contact.sortedTags[0] ? contact.sortedTags[0] : '');
 
     if (!linkedContacts.some((c) => c.phone === clean10)) {
       setLinkedContacts((prev) => [
@@ -421,7 +436,7 @@ export default function EditContactPage({ route, navigation }: any) {
         {
           name: contact.Name || 'Unnamed',
           phone: clean10,
-          primaryTag: primaryTag,
+          primaryTag: pTag,
         },
       ]);
     }
@@ -439,6 +454,8 @@ export default function EditContactPage({ route, navigation }: any) {
 
   const handleClearAllTags = () => {
     setTagsList([]);
+    setPrimaryTag('');
+    setIsPrimaryDropdownOpen(false);
     setLinkedContacts([]);
     setTagInput('');
   };
@@ -531,6 +548,12 @@ export default function EditContactPage({ route, navigation }: any) {
       return;
     }
 
+    // Mandatory Primary Tag validation check
+    if (!primaryTag.trim()) {
+      Alert.alert('Validation Error', 'Primary Tag cannot be empty. Please select or enter a primary tag.');
+      return;
+    }
+
     setSaving(true);
     try {
       for (const entry of validEntries) {
@@ -571,6 +594,7 @@ export default function EditContactPage({ route, navigation }: any) {
           Phonenumber: numbersStr,
           Phonelabels: labelsStr,
           Tags: sanitizedTags,
+          PrimaryTag: primaryTag.trim(),
           OtherDetails: notes.trim(),
           LinkedContactPhone: linkedPhonesString,
         })
@@ -797,6 +821,41 @@ export default function EditContactPage({ route, navigation }: any) {
                 returnKeyType="done"
               />
             </TouchableOpacity>
+
+            {/* Primary Tag Section with Auto-Suggest Dropdown */}
+            <Text style={styles.label}>Primary Tag *</Text>
+            <View style={styles.primaryInputWrapper}>
+              <TextInput 
+                style={styles.input} 
+                value={primaryTag} 
+                onChangeText={(text) => {
+                  setPrimaryTag(text);
+                  setIsPrimaryDropdownOpen(true);
+                }} 
+                onFocus={() => setIsPrimaryDropdownOpen(true)} 
+                placeholder="Type or select primary tag"
+                placeholderTextColor="#94A3B8"
+              />
+
+              {isPrimaryDropdownOpen && tagsList.length > 0 && (
+                <View style={styles.autoSuggestDropdown}>
+                  {tagsList
+                    .filter((tag) => tag.toLowerCase().includes(primaryTag.toLowerCase()))
+                    .map((tag) => (
+                      <TouchableOpacity
+                        key={tag}
+                        style={styles.autoSuggestItem}
+                        onPress={() => {
+                          setPrimaryTag(tag);
+                          setIsPrimaryDropdownOpen(false);
+                        }}
+                      >
+                        <Text style={styles.autoSuggestItemText}>{tag}</Text>
+                      </TouchableOpacity>
+                    ))}
+                </View>
+              )}
+            </View>
 
             {(tagSuggestions.length > 0 || contactSuggestions.length > 0) && (
               <View style={styles.suggestionsDropdownContainer}>
@@ -1218,6 +1277,36 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     paddingVertical: 2,
     paddingHorizontal: 4,
+  },
+  primaryInputWrapper: {
+    position: 'relative',
+    zIndex: 20,
+  },
+  autoSuggestDropdown: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    zIndex: 100,
+  },
+  autoSuggestItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  autoSuggestItemText: {
+    fontSize: 14,
+    color: '#334155',
+    fontWeight: '500',
   },
   suggestionsDropdownContainer: {
     backgroundColor: '#FFFFFF',
