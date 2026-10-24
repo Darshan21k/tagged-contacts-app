@@ -43,4 +43,5 @@ export interface FollowupItem {
   completed_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  raw_phone_numbers: string;
 }

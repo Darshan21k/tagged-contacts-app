@@ -15,6 +15,7 @@ import AdminPage from '../screens/AdminPage';
 import TagsPopupPage from '../screens/TagsPopupPage';
 import RecentActivityScreen from '../screens/RecentActivityScreen';
 import FollowupsScreen from '../screens/FollowupsScreen';
+import CallHistoryScreen from '../screens/CallHistoryScreen'; // <-- 1. Import your new Call History screen
 import OfflineBanner from '../components/OfflineBanner';
 
 import HomeScreen from '../screens/HomeScreen';
@@ -23,6 +24,10 @@ import ProfileScreen from '../screens/ProfileScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+
+// --- SAFETY FEATURE FLAG ---
+// Set to false to instantly remove the Recents tab and revert navigation if needed for Play Store review
+const SHOW_RECENTS_TAB = true;
 
 function MainTabs() {
   const insets = useSafeAreaInsets();
@@ -53,13 +58,23 @@ function MainTabs() {
           fontWeight: '600',
           marginTop: 2,
         },
-        tabBarIcon: ({ color, focused }) => {
-          let iconName: keyof typeof Ionicons.glyphMap = 'home';
-          if (route.name === 'Home') iconName = focused ? 'add-circle' : 'add-circle-outline';
-          else if (route.name === 'Contacts') iconName = focused ? 'people' : 'people-outline';
-          else if (route.name === 'Profile') iconName = focused ? 'person' : 'person-outline';
-          return <Ionicons name={iconName} size={24} color={color} />;
-        },
+       tabBarIcon: ({ color, focused }) => {
+  let iconName: keyof typeof Ionicons.glyphMap = 'home';
+  if (route.name === 'Home') iconName = focused ? 'add-circle' : 'add-circle-outline';
+  else if (route.name === 'Contacts') iconName = focused ? 'people' : 'people-outline';
+  else if (route.name === 'Profile') iconName = focused ? 'person' : 'person-outline';
+  
+  if (route.name === 'Recents') {
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+        <Ionicons name="call-outline" size={20} color={color} />
+        <Ionicons name="swap-vertical" size={14} color={color} style={{ marginLeft: -2 }} />
+      </View>
+    );
+  }
+
+  return <Ionicons name={iconName} size={24} color={color} />;
+},
       })}
     >
       <Tab.Screen 
@@ -77,6 +92,26 @@ function MainTabs() {
           ),
         }} 
       />
+
+      {/* 3. Conditional Recents Tab (Placed between Add and Contacts) */}
+      {SHOW_RECENTS_TAB && (
+        <Tab.Screen 
+          name="Recents" 
+          component={CallHistoryScreen} 
+          options={{
+            tabBarLabel: 'Recents',
+            header: () => (
+              <View style={[styles.compactHeaderContainer, { paddingTop: insets.top + 6 }]}>
+                <View style={styles.compactHeaderRow}>
+                  <Text style={styles.compactHeaderTitle}>Recents</Text>
+                  <View style={styles.badgeIndicator} />
+                </View>
+              </View>
+            ),
+          }} 
+        />
+      )}
+
       <Tab.Screen
         name="Contacts"
         component={ContactsScreen}

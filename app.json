@@ -26,7 +26,11 @@
         "backgroundColor": "#FFFFFF",
         "image": "./assets/icon.png",
         "resizeMode": "contain"
-      }
+      },
+      "permissions": [
+        "READ_CALL_LOG",
+        "READ_CONTACTS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

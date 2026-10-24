@@ -279,9 +279,24 @@ export default function RecentActivityScreen({ route, navigation }: any) {
           keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => {
+            const phoneEntries = (() => {
+              const numbers = (item.Phonenumber || '').split(',').map((p) => p.trim()).filter(Boolean);
+              const labels = ((item as any).Phonelabels || '').split(',').map((l: string) => l.trim()).filter(Boolean);
+
+              return numbers.map((num, idx) => ({
+                number: num,
+                label: labels[idx] || 'Mobile',
+              }));
+            })();
+
+            const primaryPhone = phoneEntries[0]?.number || '';
+            const secondaryPhones = phoneEntries.slice(1);
+
             const rawTags = item.Tags
               ? item.Tags.split(',').map((t: string) => t.trim()).filter(Boolean)
               : [];
+
+            const primaryTagVal = (item as any).PrimaryTag || (rawTags.length > 0 ? rawTags[0] : '');
 
             const linkedPhones = ((item as any).LinkedContactPhone || '')
               .split(',')
@@ -301,27 +316,43 @@ export default function RecentActivityScreen({ route, navigation }: any) {
                         <Text style={styles.nameText} numberOfLines={1}>
                           {item.Name}
                         </Text>
-                        <View style={styles.timeBadgeContainer}>
-                          <Text style={styles.timeBadgeText}>{formatRelativeDate(item.created_at)}</Text>
-                        </View>
                       </View>
 
-                      <TouchableOpacity
-                        style={styles.phoneChipTouchable}
-                        onPress={() => handleCopyPhone(item.Phonenumber)}
-                        activeOpacity={0.6}
-                      >
-                        <View style={styles.phoneRow}>
-                          <Ionicons name="call-outline" size={14} color="#2563EB" />
-                          <Text style={styles.phoneText}>{item.Phonenumber}</Text>
-                        </View>
-                      </TouchableOpacity>
+                      {/* Primary Tag */}
+                      {primaryTagVal ? (
+                        <TouchableOpacity
+                          onPress={() => handleSelectTagAndNavigate(primaryTagVal)}
+                          activeOpacity={0.7}
+                          style={styles.primaryTagTouchable}
+                        >
+                          <Text style={styles.primaryTagText}>{primaryTagVal}</Text>
+                        </TouchableOpacity>
+                      ) : null}
+
+                      {/* Primary Phone Row */}
+                      {phoneEntries.length > 0 && (
+                        <TouchableOpacity
+                          style={styles.phoneChipTouchable}
+                          onPress={() => handleCopyPhone(primaryPhone)}
+                          activeOpacity={0.6}
+                        >
+                          <View style={styles.phoneRow}>
+                            <Ionicons name="call-outline" size={15} color="#2563EB" />
+                            <Text style={styles.phoneText}>{primaryPhone}</Text>
+                            {phoneEntries[0].label ? (
+                              <View style={[styles.labelBadge, styles.secondaryLabelBadge]}>
+                                <Text style={[styles.labelBadgeText, styles.secondaryLabelBadgeText]}>{phoneEntries[0].label}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     <View style={styles.actionButtons}>
                       <TouchableOpacity
                         style={[styles.iconButton, styles.whatsappButton]}
-                        onPress={() => handleWhatsApp(item.Phonenumber)}
+                        onPress={() => handleWhatsApp(primaryPhone)}
                         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         activeOpacity={0.8}
                       >
@@ -330,7 +361,7 @@ export default function RecentActivityScreen({ route, navigation }: any) {
 
                       <TouchableOpacity
                         style={[styles.iconButton, styles.callButton]}
-                        onPress={() => handleCall(item.Phonenumber)}
+                        onPress={() => handleCall(primaryPhone)}
                         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         activeOpacity={0.8}
                       >
@@ -339,6 +370,46 @@ export default function RecentActivityScreen({ route, navigation }: any) {
                     </View>
                   </View>
 
+                  {/* Stacked Secondary Phone Rows */}
+                  {secondaryPhones.map((sec, sIdx) => (
+                    <View key={`sec-phone-${sIdx}`} style={styles.secondaryPhoneRowWrapper}>
+                      <TouchableOpacity
+                        style={styles.phoneChipTouchable}
+                        onPress={() => handleCopyPhone(sec.number)}
+                        activeOpacity={0.6}
+                      >
+                        <View style={styles.phoneRow}>
+                          <Ionicons name="call-outline" size={14} color="#64748B" />
+                          <Text style={styles.secondaryPhoneText}>{sec.number}</Text>
+                          {sec.label ? (
+                            <View style={[styles.labelBadge, styles.secondaryLabelBadge]}>
+                              <Text style={[styles.labelBadgeText, styles.secondaryLabelBadgeText]}>{sec.label}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </TouchableOpacity>
+
+                      <View style={styles.secondaryActionButtons}>
+                        <TouchableOpacity
+                          style={[styles.secondaryIconButton, styles.whatsappButton]}
+                          onPress={() => handleWhatsApp(sec.number)}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Ionicons name="logo-whatsapp" size={14} color="#FFFFFF" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.secondaryIconButton, styles.callButton]}
+                          onPress={() => handleCall(sec.number)}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Ionicons name="call" size={13} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+
+                  {/* Tags and Linked Contacts Pills */}
                   {(rawTags.length > 0 || linkedPhones.length > 0) && (
                     <View style={styles.tagContainer}>
                       {rawTags.map((tag: string, index: number) => (
@@ -387,6 +458,7 @@ export default function RecentActivityScreen({ route, navigation }: any) {
                     </View>
                   )}
 
+                  {/* Notes Section */}
                   {item.OtherDetails ? (
                     <View style={styles.notesContainer}>
                       <Text style={styles.detailsText} numberOfLines={2}>
@@ -394,6 +466,12 @@ export default function RecentActivityScreen({ route, navigation }: any) {
                       </Text>
                     </View>
                   ) : null}
+
+                  {/* Added On Date Display Placed Below Notes */}
+                  <View style={styles.dateInfoRow}>
+                    <Ionicons name="time-outline" size={11.5} color="#94A3B8" />
+                    <Text style={styles.dateInfoText}>Added on: {formatRelativeDate(item.created_at)}</Text>
+                  </View>
                 </TouchableOpacity>
               </View>
             );
@@ -592,20 +670,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#1E293B',
-    maxWidth: '65%',
   },
-  timeBadgeContainer: {
+  primaryTagTouchable: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    marginBottom: 2,
     backgroundColor: '#EFF6FF',
     paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingVertical: 1.5,
     borderRadius: 6,
-    borderWidth: 0.5,
+    borderWidth: 1,
     borderColor: '#BFDBFE',
   },
-  timeBadgeText: {
-    fontSize: 10.5,
+  primaryTagText: {
+    fontSize: 12.50,
     fontWeight: '700',
-    color: '#2563EB',
+    color: '#2255df',
   },
   phoneChipTouchable: {
     alignSelf: 'flex-start',
@@ -616,12 +696,59 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 2,
     paddingRight: 6,
+    gap: 6,
   },
   phoneText: {
     fontSize: 13.5,
     color: '#2563EB',
     fontWeight: '600',
-    marginLeft: 6,
+  },
+  secondaryPhoneText: {
+    fontSize: 13.5,
+    color: '#334155',
+    fontWeight: '600',
+  },
+  labelBadge: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginLeft: 4,
+  },
+  labelBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  secondaryPhoneRowWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F1F5F9',
+  },
+  secondaryLabelBadge: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#CBD5E1',
+  },
+  secondaryLabelBadgeText: {
+    color: '#475569',
+  },
+  secondaryActionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  secondaryIconButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   actionButtons: {
     flexDirection: 'row',
@@ -662,6 +789,20 @@ const styles = StyleSheet.create({
     color: '#081b50',
     fontSize: 12.3,
     fontWeight: '600',
+  },
+  dateInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+    paddingTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#F1F5F9',
+  },
+  dateInfoText: {
+    fontSize: 11.5,
+    color: '#64748B',
+    fontWeight: '500',
   },
   notesContainer: {
     flexDirection: 'row',

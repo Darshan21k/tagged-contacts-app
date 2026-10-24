@@ -41,7 +41,7 @@ interface PhoneEntry {
 
 const POPULAR_LABELS = ['Mobile', 'Work', 'Personal', 'WhatsApp', 'Home'];
 
-export default function HomeScreen({ navigation }: any) {
+export default function HomeScreen({ navigation, route }: any) {
   const insets = useSafeAreaInsets();
 
   const [name, setName] = useState('');
@@ -79,10 +79,24 @@ export default function HomeScreen({ navigation }: any) {
     };
   }, []);
 
+  // Handle prefilled phone number from Call History navigation params
+  useEffect(() => {
+    if (route?.params?.prefilledPhone) {
+      const raw = route.params.prefilledPhone;
+      const clean10 = raw.replace(/\D/g, '').slice(-10);
+      if (clean10) {
+        setPhoneEntries([{ number: clean10, label: 'Mobile' }]);
+      }
+    }
+  }, [route?.params?.prefilledPhone]);
+
   useFocusEffect(
     useCallback(() => {
-      setName('');
-      setPhoneEntries([{ number: '', label: 'Mobile' }]);
+      // Only reset if we didn't just come in with a prefilled phone parameter
+      if (!route?.params?.prefilledPhone) {
+        setName('');
+        setPhoneEntries([{ number: '', label: 'Mobile' }]);
+      }
       setActiveLabelIndex(null);
       setTagsList([]);
       setPrimaryTag('');
@@ -98,7 +112,7 @@ export default function HomeScreen({ navigation }: any) {
         fetchSuggestedTags(active);
         fetchAllContacts(active);
       });
-    }, [userPhone])
+    }, [userPhone, route?.params?.prefilledPhone])
   );
 
   // Reactive Syncing: Auto-sync primary tag if general tags change or get deleted
@@ -481,7 +495,6 @@ export default function HomeScreen({ navigation }: any) {
       return;
     }
 
-    // Mandatory Primary Tag validation check
     if (!primaryTag.trim()) {
       Alert.alert('Validation Error', 'Primary Tag cannot be empty. Please select or enter a primary tag.');
       return;
@@ -1331,12 +1344,11 @@ const styles = StyleSheet.create({
   },
   suggestionChipText: { fontSize: 12, color: '#3730A3', fontWeight: '600' },
   
-  // Fixed Bottom Bar Styling
   bottomBar: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
     paddingTop: 10,
-    paddingBottom: 10, // Slim fixed padding to remove all leftover white space
+    paddingBottom: 10,
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
     elevation: 8,

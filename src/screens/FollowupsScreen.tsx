@@ -91,10 +91,16 @@ export default function FollowupsScreen({ route, navigation }: any) {
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [followups, setFollowups] = useState<FollowupItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingCompleted, setLoadingCompleted] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Accordion & Lazy-load cache state
   const [isCompletedExpanded, setIsCompletedExpanded] = useState(false);
+  const [completedFetched, setCompletedFetched] = useState(false);
+  const [completedTotalCount, setCompletedTotalCount] = useState(0);
+
   const [completedFilter, setCompletedFilter] = useState<CompletedFilterType>('all');
   const [isCompletedFilterModalVisible, setIsCompletedFilterModalVisible] = useState(false);
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<number>>(new Set());
@@ -191,6 +197,39 @@ export default function FollowupsScreen({ route, navigation }: any) {
     })();
   }, [navigation]);
 
+   const contactsMap = useMemo(() => {
+    const map = new Map<number, Contact>();
+    allContacts.forEach((c) => map.set(c.id, c));
+    return map;
+  }, [allContacts]);
+  // Handle notification response click to filter/open specific follow-up
+  useEffect(() => {
+    try {
+      const Notifications = require('expo-notifications');
+      if (Notifications && typeof Notifications.addNotificationResponseReceivedListener === 'function') {
+        const subscription = Notifications.addNotificationResponseReceivedListener((response: any) => {
+          const data = response?.notification?.request?.content?.data;
+          const targetFollowupId = data?.followupId;
+          
+          if (targetFollowupId) {
+            const targetItem = followups.find((f) => f.id === targetFollowupId);
+            if (targetItem) {
+              const contact = targetItem.contact_id ? contactsMap.get(targetItem.contact_id) : null;
+              if (contact?.Name) {
+                setSearchQuery(contact.Name);
+              } else if (targetItem.note) {
+                setSearchQuery(targetItem.note.substring(0, 15));
+              }
+            }
+          }
+        });
+        return () => subscription.remove();
+      }
+    } catch {
+      // Fallback guard if sandbox isn't active
+    }
+  }, [followups, contactsMap]);
+
   const triggerMilestoneCelebration = () => {
     setShowConfetti(true);
     setTimeout(() => {
@@ -235,11 +274,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
     [toastOpacity, toastScale]
   );
 
-  const contactsMap = useMemo(() => {
-    const map = new Map<number, Contact>();
-    allContacts.forEach((c) => map.set(c.id, c));
-    return map;
-  }, [allContacts]);
+ 
 
   useEffect(() => {
     if (!routeParamsHandledRef.current) {
@@ -301,7 +336,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
         return;
       }
 
-      // Include both future reminders and overdue uncompleted reminders
       const activeFollowups = freshFollowupsFromSupabase.filter(
         item => !item.is_completed && item.due_date
       );
@@ -325,7 +359,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
       const schedulingPromises = activeFollowups.map(async (item) => {
         try {
           const dueD = item.due_date;
-          const dueT = item.due_time || '09:00 AM'; // Default time if none specified for overdue items
+          const dueT = item.due_time || '09:00 AM';
           
           const match = dueT.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
           if (!match) return;
@@ -339,20 +373,22 @@ export default function FollowupsScreen({ route, navigation }: any) {
           const [y, mo, d] = dueD.split('-').map(Number);
           let triggerDate = new Date(y, mo - 1, d, h, m, 0);
 
-          // If the due date is in the past (Overdue), set it for the next upcoming occurrence (e.g., 9:00 AM today/tomorrow)
           if (triggerDate.getTime() <= Date.now()) {
             const now = new Date();
             triggerDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
             if (triggerDate.getTime() <= Date.now()) {
-              // If today's time has already passed, schedule for tomorrow morning so it triggers daily
               triggerDate.setDate(triggerDate.getDate() + 1);
             }
           }
 
-          const notifTitle = dueD < todayStr ? 'Overdue Follow-up Reminder ⚠️' : 'Follow-up Reminder ⏰';
-          const notifBody = item.type === 'task'
-            ? `Group Task: ${item.note.trim() || 'Scheduled Task'}`
-            : `Reminder: ${item.note.trim() || 'Scheduled Follow-up'}`;
+          // Properly resolve contact name or group task name
+          const contact = item.contact_id ? contactsMap.get(item.contact_id) : null;
+          const targetName = item.type === 'task' 
+            ? 'Group Task' 
+            : contact?.Name || 'Follow-up';
+
+          const notifTitle = dueD < todayStr ? `Overdue: ${targetName} ⚠️` : `Reminder: ${targetName} ⏰`;
+          const notifBody = item.note.trim() || 'Scheduled Follow-up';
 
           await Notifications.scheduleNotificationAsync({
             content: {
@@ -378,28 +414,51 @@ export default function FollowupsScreen({ route, navigation }: any) {
     }
   };
 
-  const fetchFollowups = useCallback(async (phone: string) => {
+  const fetchActiveFollowups = useCallback(async (phone: string) => {
     try {
       const { data, error } = await supabase
         .from('Followups_Table')
         .select('*')
         .eq('Userphonenumber', phone)
+        .eq('is_completed', false)
         .order('due_date', { ascending: true });
       if (error) throw error;
+      
       setFollowups(data || []);
-
       if (data) {
         smartSyncNotifications(data);
       }
     } catch (err: any) {
-      console.warn('Failed to load followups:', err.message);
+      console.warn('Failed to load active followups:', err.message);
     }
   }, []);
 
- const loadData = useCallback(async () => {
+  const fetchCompletedCount = useCallback(async (phone: string) => {
+    try {
+      const { count, error } = await supabase
+        .from('Followups_Table')
+        .select('*', { count: 'exact', head: true })
+        .eq('Userphonenumber', phone)
+        .eq('is_completed', true);
+      
+      if (!error && count !== null) {
+        setCompletedTotalCount(count);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch completed count:', err);
+    }
+  }, []);
+
+  const loadData = useCallback(async () => {
     const storedPhone = (await AsyncStorage.getItem('user_phone')) || userPhone;
-    await Promise.all([fetchContacts(storedPhone), fetchFollowups(storedPhone)]);
-  }, [userPhone, fetchContacts, fetchFollowups]);
+    setIsCompletedExpanded(false);
+    setCompletedFetched(false);
+    await Promise.all([
+      fetchContacts(storedPhone),
+      fetchActiveFollowups(storedPhone),
+      fetchCompletedCount(storedPhone),
+    ]);
+  }, [userPhone, fetchContacts, fetchActiveFollowups, fetchCompletedCount]);
 
   useFocusEffect(
     useCallback(() => {
@@ -428,7 +487,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
     setActiveFilterContactId(undefined);
     setSearchQuery('');
     setActiveTab('all');
-    setIsCompletedExpanded(false);
     setCompletedFilter('all');
     setExpandedTaskIds(new Set());
     Keyboard.dismiss();
@@ -438,6 +496,42 @@ export default function FollowupsScreen({ route, navigation }: any) {
   }, [navigation, loadData]);
 
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  const handleToggleCompletedAccordion = async () => {
+    Haptics.selectionAsync().catch(() => {});
+    const nextState = !isCompletedExpanded;
+    setIsCompletedExpanded(nextState);
+
+    if (nextState && !completedFetched) {
+      setLoadingCompleted(true);
+      try {
+        const storedPhone = (await AsyncStorage.getItem('user_phone')) || userPhone;
+        const { data, error } = await supabase
+          .from('Followups_Table')
+          .select('*')
+          .eq('Userphonenumber', storedPhone)
+          .eq('is_completed', true)
+          .order('completed_at', { ascending: false })
+          .limit(100);
+
+        if (error) throw error;
+
+        if (data) {
+          setFollowups((prev) => {
+            const existingIds = new Set(prev.map((f) => f.id));
+            const newItems = data.filter((f) => !existingIds.has(f.id));
+            return [...prev, ...newItems];
+          });
+          setCompletedTotalCount(data.length);
+        }
+        setCompletedFetched(true);
+      } catch (err: any) {
+        console.warn('Failed to load completed history:', err.message);
+      } finally {
+        setLoadingCompleted(false);
+      }
+    }
+  };
 
   const presetDates = useMemo(() => {
     const getOffsetDate = (offset: number) => {
@@ -556,14 +650,19 @@ export default function FollowupsScreen({ route, navigation }: any) {
     ];
 
     completedFollowups.forEach((item) => {
+      // Use completed_at as the primary date reference for history grouping & display
       const itemDateStr = item.completed_at?.split('T')[0] || item.due_date;
       const [y, m, d] = itemDateStr.split('-').map(Number);
       const itemTime = new Date(y, m - 1, d).getTime();
 
+      const formattedItemDate = formatToDDMMYYYY(itemDateStr);
+
       if (itemTime >= todayStart) {
         groups[0].data.push(item);
+        groups[0].subtitle = formattedItemDate;
       } else if (itemTime >= yesterdayStart) {
         groups[1].data.push(item);
+        groups[1].subtitle = formattedItemDate;
       } else if (itemTime >= weekStart) {
         groups[2].data.push(item);
       } else if (itemTime >= monthStart) {
@@ -592,9 +691,9 @@ export default function FollowupsScreen({ route, navigation }: any) {
       overdue,
       today,
       upcoming,
-      completed: completedFollowups.length,
+      completed: completedTotalCount,
     };
-  }, [activeFollowups, completedFollowups.length, todayStr]);
+  }, [activeFollowups, completedTotalCount, todayStr]);
 
   const filteredActiveList = useMemo(() => {
     let list = activeFollowups;
@@ -642,6 +741,9 @@ export default function FollowupsScreen({ route, navigation }: any) {
       const contact = item.contact_id ? contactsMap.get(item.contact_id) : null;
       const targetName = item.type === 'task' ? 'Group Task' : contact?.Name || 'Follow-up';
       showCenteredToast('Follow-ups Completed! 🎉', formatToDDMMYYYY(item.due_date), `Completed: ${targetName}`, item.note);
+      setCompletedTotalCount((prev) => prev + 1);
+    } else {
+      setCompletedTotalCount((prev) => Math.max(0, prev - 1));
     }
 
     const nextCompletedContactIds = nextState ? item.completed_contact_ids : [];
@@ -719,6 +821,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
     triggerMilestoneCelebration();
     const allIds = targetContacts.map((c) => c.id);
 
+    setCompletedTotalCount((prev) => prev + 1);
     setFollowups((prev) =>
       prev.map((f) =>
         f.id === item.id
@@ -750,6 +853,9 @@ export default function FollowupsScreen({ route, navigation }: any) {
         style: 'destructive',
         onPress: async () => {
           await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          if (item.is_completed) {
+            setCompletedTotalCount((prev) => Math.max(0, prev - 1));
+          }
           setFollowups((prev) => prev.filter((f) => f.id !== item.id));
           try {
             await supabase.from('Followups_Table').delete().eq('id', item.id);
@@ -765,7 +871,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
     if (completedFollowups.length === 0) return;
     Alert.alert(
       'Clear Completed History',
-      `Delete all ${completedFollowups.length} completed logs? This cannot be undone.`,
+      `Delete all completed logs? This cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -775,6 +881,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
             const idsToDelete = completedFollowups.map((f) => f.id);
             setFollowups((prev) => prev.filter((f) => !idsToDelete.includes(f.id)));
+            setCompletedTotalCount(0);
             try {
               await supabase.from('Followups_Table').delete().in('id', idsToDelete);
             } catch {
@@ -925,7 +1032,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
     const lastHash = textUpToCursor.lastIndexOf('#');
     const lastNewline = textUpToCursor.lastIndexOf('\n');
     
-    // For contacts (@), space acts as a delimiter. For tags (#), we allow spaces for multi-word tags up to the next newline.
     const contactDelimiter = Math.max(textUpToCursor.lastIndexOf(' '), lastNewline);
 
     if (lastAt !== -1 && lastAt > contactDelimiter && (lastHash === -1 || lastAt > lastHash)) {
@@ -933,7 +1039,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
       setSuggestionQuery(textUpToCursor.substring(lastAt + 1).toLowerCase());
     } else if (lastHash !== -1 && lastHash > lastNewline && (lastAt === -1 || lastHash > lastAt)) {
       setSuggestionMode('tag');
-      // Capture everything after the # up to the cursor, allowing spaces for multi-word tags like "RR Nagar"
       setSuggestionQuery(textUpToCursor.substring(lastHash + 1).toLowerCase());
     } else {
       setSuggestionMode(null);
@@ -982,7 +1087,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
     
     if (lastHash !== -1) {
       const base = before.substring(0, lastHash);
-      // Replace the typed query with the clean official tag name
       const newText = base + after;
       setNoteText(newText);
       const newPos = base.length;
@@ -993,6 +1097,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
     setSuggestionQuery('');
     noteInputRef.current?.focus();
   };
+
   const handleRemoveBoundContact = (contactId: number) => {
     Haptics.selectionAsync().catch(() => {});
     setBoundContacts((prev) => prev.filter((c) => c.id !== contactId));
@@ -1058,10 +1163,8 @@ export default function FollowupsScreen({ route, navigation }: any) {
       const triggerDate = new Date(y, mo - 1, d, h, m, 0);
 
       if (triggerDate.getTime() > Date.now()) {
-        const notifTitle = 'Follow-up Reminder ⏰';
-        const notifBody = isTaskType 
-          ? `Group Task: ${note.trim() || targetName}`
-          : `${targetName}: ${note.trim() || 'Scheduled Follow-up'}`;
+        const notifTitle = `Reminder: ${targetName} ⏰`;
+        const notifBody = note.trim() || 'Scheduled Follow-up';
 
         await Notifications.scheduleNotificationAsync({
           content: {
@@ -1180,7 +1283,8 @@ export default function FollowupsScreen({ route, navigation }: any) {
       setIsTimeEnabled(false);
       setDueDate(new Date().toISOString().split('T')[0]);
       
-      fetchFollowups(activePhone);
+      fetchActiveFollowups(activePhone);
+      fetchCompletedCount(activePhone);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save follow-up.');
       loadData();
@@ -1226,7 +1330,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
   return (
     <Animated.View style={[styles.container, { transform: [{ scale: celebrateScale }] }]}>
-      {/* Confetti Cannon Effect (Blaster of Papers) */}
+      {/* Confetti Cannon Effect */}
       {showConfetti && (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
           <ConfettiCannon
@@ -1440,10 +1544,15 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   </TouchableOpacity>
 
                   <View style={styles.cardHeaderCenter}>
+                    {/* Line 1: Contact Name (Left) */}
                     <View style={styles.cardHeaderNameColumn}>
                       <Text style={styles.typeBadgeText} numberOfLines={1}>
                         {isTask ? '🏷️ GROUP TASK' : `👤 ${contact?.Name || 'Contact'}`}
                       </Text>
+                    </View>
+
+                    {/* Line 2: Primary Tag (Left) */}
+                    <View style={styles.tagAndTimeRow}>
                       {contact && !isTask && (() => {
                         const contactPrimaryTag = (contact as any).PrimaryTag || (contact.Tags ? contact.Tags.split(',')[0].trim() : '');
                         return contactPrimaryTag ? (
@@ -1457,27 +1566,41 @@ export default function FollowupsScreen({ route, navigation }: any) {
                     </View>
                   </View>
 
-                  <View
-                    style={[
-                      styles.dueBadge,
-                      isOverdue && styles.dueBadgeOverdue,
-                      isToday && styles.dueBadgeToday,
-                    ]}
-                  >
-                    <Text
+                  {/* Right Side Stack: Due Status Badge on Top, Time Directly Below Matching Urgency Color */}
+                  <View style={styles.rightBadgeTimeColumn}>
+                    <View
                       style={[
-                        styles.dueBadgeText,
-                        isOverdue && styles.dueBadgeTextOverdue,
-                        isToday && styles.dueBadgeTextToday,
+                        styles.dueBadge,
+                        isOverdue && styles.dueBadgeOverdue,
+                        isToday && styles.dueBadgeToday,
                       ]}
                     >
-                      {isOverdue 
-                        ? getOverdueDaysText(item.due_date, todayStr) 
-                        : isToday 
-                        ? 'Today' 
-                        : formatToDDMMYYYY(item.due_date)}
-                      {item.due_time ? ` · ${item.due_time}` : ''}
-                    </Text>
+                      <Text
+                        style={[
+                          styles.dueBadgeText,
+                          isOverdue && styles.dueBadgeTextOverdue,
+                          isToday && styles.dueBadgeTextToday,
+                        ]}
+                      >
+                        {isOverdue 
+                          ? getOverdueDaysText(item.due_date, todayStr) 
+                          : isToday 
+                          ? 'Today' 
+                          : formatToDDMMYYYY(item.due_date)}
+                      </Text>
+                    </View>
+
+                    {item.due_time ? (
+                      <Text
+                        style={[
+                          styles.timeBelowDateText,
+                          isOverdue && styles.timeTextOverdue,
+                          isToday && styles.timeTextToday,
+                        ]}
+                      >
+                        {item.due_time}
+                      </Text>
+                    ) : null}
                   </View>
 
                   <TouchableOpacity
@@ -1563,20 +1686,19 @@ export default function FollowupsScreen({ route, navigation }: any) {
                             }));
 
                             return (
-              <View key={tc.id} style={styles.checklistItemRow}>
-                <TouchableOpacity
-                  style={styles.checkItemClickableArea}
-                  activeOpacity={0.7}
-                  onPress={() => handleToggleTaskContact(item, tc.id)}
-                >
-                  <Ionicons
-                    name={isDone ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={isDone ? '#10B981' : '#64748B'}
-                    style={{ marginRight: 10 }}
-                  />
-                 <View style={{ flex: 1 }}>
-                                    {/* Contact Name */}
+                              <View key={tc.id} style={styles.checklistItemRow}>
+                                <TouchableOpacity
+                                  style={styles.checkItemClickableArea}
+                                  activeOpacity={0.7}
+                                  onPress={() => handleToggleTaskContact(item, tc.id)}
+                                >
+                                  <Ionicons
+                                    name={isDone ? 'checkbox' : 'square-outline'}
+                                    size={22}
+                                    color={isDone ? '#10B981' : '#64748B'}
+                                    style={{ marginRight: 10 }}
+                                  />
+                                  <View style={{ flex: 1 }}>
                                     <Text
                                       style={[
                                         styles.checklistNameText,
@@ -1587,7 +1709,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                       {tcIdx + 1}. {tc.Name}
                                     </Text>
                                     
-                                    {/* Primary Tag Placed Cleanly Directly Below Name */}
                                     {(() => {
                                       const contactPrimaryTag = (tc as any).PrimaryTag || (tc.Tags ? tc.Tags.split(',')[0].trim() : '');
                                       return contactPrimaryTag ? (
@@ -1686,15 +1807,12 @@ export default function FollowupsScreen({ route, navigation }: any) {
               <View style={styles.completedAccordionHeaderRow}>
                 <TouchableOpacity
                   style={styles.completedAccordionToggle}
-                  onPress={() => {
-                    Haptics.selectionAsync().catch(() => {});
-                    setIsCompletedExpanded((prev) => !prev);
-                  }}
+                  onPress={handleToggleCompletedAccordion}
                 >
                   <Text style={styles.completedAccordionTitle}>
                     {activeFilterContactId
-                      ? `Completed History (${counts.completed})`
-                      : `Completed (${counts.completed})`}
+                      ? `Completed History (${completedTotalCount})`
+                      : `Completed (${completedTotalCount})`}
                   </Text>
                   <Ionicons
                     name={isCompletedExpanded ? 'chevron-up' : 'chevron-down'}
@@ -1703,38 +1821,41 @@ export default function FollowupsScreen({ route, navigation }: any) {
                   />
                 </TouchableOpacity>
 
-                <View style={styles.completedHeaderActions}>
-                  {completedFollowups.length > 0 && (
-                    <TouchableOpacity
-                      style={styles.clearCompletedHeaderBtn}
-                      onPress={handleClearAllCompleted}
-                      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                    >
-                      <Ionicons name="trash-outline" size={13} color="#EF4444" />
-                      <Text style={styles.clearCompletedHeaderText}>Clear</Text>
-                    </TouchableOpacity>
-                  )}
+                {isCompletedExpanded && completedFetched && (
+                  <View style={styles.completedHeaderActions}>
+                    {completedFollowups.length > 0 && (
+                      <TouchableOpacity
+                        style={styles.clearCompletedHeaderBtn}
+                        onPress={handleClearAllCompleted}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                      >
+                        <Ionicons name="trash-outline" size={13} color="#EF4444" />
+                        <Text style={styles.clearCompletedHeaderText}>Clear</Text>
+                      </TouchableOpacity>
+                    )}
 
-                  <TouchableOpacity
-                    style={styles.completedFilterTrigger}
-                    onPress={() => {
-                      Haptics.selectionAsync().catch(() => {});
-                      setIsCompletedFilterModalVisible(true);
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="filter" size={12} color="#2563EB" />
-                    <Text style={styles.completedFilterTriggerText}>
-                      Filter: {COMPLETED_FILTERS.find((f) => f.key === completedFilter)?.label} ▾
-                    </Text>
-                  </TouchableOpacity>
-                </View>
+                    <TouchableOpacity
+                      style={styles.completedFilterTrigger}
+                      onPress={() => {
+                        Haptics.selectionAsync().catch(() => {});
+                        setIsCompletedFilterModalVisible(true);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="filter" size={12} color="#2563EB" />
+                      <Text style={styles.completedFilterTriggerText}>
+                        Filter: {COMPLETED_FILTERS.find((f) => f.key === completedFilter)?.label} ▾
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
 
-              {/* DATE-WISE GROUPED COMPLETED HISTORY VIEW */}
               {isCompletedExpanded && (
                 <View style={{ gap: 12, marginTop: 10 }}>
-                  {groupedCompletedFollowups.length === 0 ? (
+                  {loadingCompleted ? (
+                    <ActivityIndicator size="small" color="#2563EB" style={{ paddingVertical: 16 }} />
+                  ) : groupedCompletedFollowups.length === 0 ? (
                     <View style={styles.emptyCompletedBox}>
                       <Ionicons name="checkmark-done-circle-outline" size={26} color="#94A3B8" />
                       <Text style={styles.emptyCompletedText}>
@@ -1759,7 +1880,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                 activeOpacity={0.8}
                                 onPress={() => handleOpenView(cItem)}
                               >
-                                <View style={{ flex: 1 }}>
+                                <View style={{ flex: 1, marginRight: 8 }}>
                                   <Text style={styles.completedTypeSub}>
                                     {cItem.type === 'task'
                                       ? '🏷 GROUP TASK'
@@ -1768,9 +1889,19 @@ export default function FollowupsScreen({ route, navigation }: any) {
                                   <Text style={styles.completedNoteText} numberOfLines={2}>
                                     {cItem.note}
                                   </Text>
-                                  <Text style={styles.completedDatesSubtext}>
-                                    Created: {formatCreatedDate(cItem.created_at)} {cItem.completed_at ? `· Completed: ${formatCreatedDate(cItem.completed_at)}` : ''}
-                                  </Text>
+                                  {/* Stacked Dates: Created on top, Completed below */}
+                                  <View style={{ marginTop: 5, gap: 2 }}>
+                                    {cItem.created_at && (
+                                      <Text style={styles.completedDatesSubtext}>
+                                        Created: {formatCreatedDate(cItem.created_at)}
+                                      </Text>
+                                    )}
+                                    {cItem.completed_at && (
+                                      <Text style={styles.completedDatesSubtext}>
+                                        Completed: {formatCreatedDate(cItem.completed_at)}
+                                      </Text>
+                                    )}
+                                  </View>
                                 </View>
 
                                 <View style={styles.completedItemActions}>
@@ -1805,7 +1936,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
         />
       )}
 
-      {/* Redesigned Centered Light Theme Toast */}
+      {/* Centered Toast */}
       {toastData && (
         <View style={styles.centeredToastBackdrop} pointerEvents="none">
           <Animated.View
@@ -1835,7 +1966,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {/* READ-ONLY VIEW MODAL FOR COMPLETED FOLLOW-UPS */}
+      {/* READ-ONLY VIEW MODAL */}
       <Modal
         visible={Boolean(viewingItem)}
         transparent={true}
@@ -1969,36 +2100,36 @@ export default function FollowupsScreen({ route, navigation }: any) {
 
       {/* Create / Edit Follow-up Modal */}
       <Modal
-  visible={isCreateModalVisible}
-  transparent={true}
-  animationType="slide"
-  onRequestClose={() => setIsCreateModalVisible(false)}
->
-  <Pressable
-    style={styles.modalOverlay}
-    onPress={() => setIsCreateModalVisible(false)}
-  >
-    <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1, width: '100%' }}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+        visible={isCreateModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setIsCreateModalVisible(false)}
       >
-        <View style={styles.modalHeaderRow}>
-          <Text style={styles.modalTitle}>
-            {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
-          </Text>
-          <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
-            <Ionicons name="close" size={22} color="#64748B" />
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView
-          keyboardShouldPersistTaps="always"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 40 }}
-          style={{ flex: 1 }}
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setIsCreateModalVisible(false)}
         >
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={{ flex: 1, width: '100%' }}
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+            >
+              <View style={styles.modalHeaderRow}>
+                <Text style={styles.modalTitle}>
+                  {editingItem ? 'Edit Follow-up' : 'New Follow-up'}
+                </Text>
+                <TouchableOpacity onPress={() => setIsCreateModalVisible(false)}>
+                  <Ionicons name="close" size={22} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                keyboardShouldPersistTaps="always"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: 40 }}
+                style={{ flex: 1 }}
+              >
                 <View style={styles.typeSelectorRow}>
                   <TouchableOpacity
                     style={[styles.typeBtn, createType === 'contact' && styles.typeBtnActive]}
@@ -2186,50 +2317,50 @@ export default function FollowupsScreen({ route, navigation }: any) {
                 </View>
 
                 {suggestionMode && (
-  <View style={styles.floatingSuggestionsContainer}>
-    <ScrollView
-      horizontal
-      keyboardShouldPersistTaps="always"
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ gap: 6, paddingHorizontal: 4 }}
-    >
-      {suggestionMode === 'contact' &&
-        allContacts
-          .filter((c) => c.Name.toLowerCase().includes(suggestionQuery))
-          .slice(0, 10)
-          .map((c) => {
-            const primaryTag = (c as any).PrimaryTag || (c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag');
-            return (
-              <TouchableOpacity
-                key={c.id}
-                style={styles.sugChip}
-                onPress={() => handleSelectContactSuggestion(c)}
-              >
-                <Ionicons name="person-circle-outline" size={14} color="#2563EB" />
-                <Text style={styles.sugChipText}>
-                  {c.Name} ({primaryTag})
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+                  <View style={styles.floatingSuggestionsContainer}>
+                    <ScrollView
+                      horizontal
+                      keyboardShouldPersistTaps="always"
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={{ gap: 6, paddingHorizontal: 4 }}
+                    >
+                      {suggestionMode === 'contact' &&
+                        allContacts
+                          .filter((c) => c.Name.toLowerCase().includes(suggestionQuery))
+                          .slice(0, 10)
+                          .map((c) => {
+                            const primaryTag = (c as any).PrimaryTag || (c.Tags ? c.Tags.split(',')[0].trim() : 'No Tag');
+                            return (
+                              <TouchableOpacity
+                                key={c.id}
+                                style={styles.sugChip}
+                                onPress={() => handleSelectContactSuggestion(c)}
+                              >
+                                <Ionicons name="person-circle-outline" size={14} color="#2563EB" />
+                                <Text style={styles.sugChipText}>
+                                  {c.Name} ({primaryTag})
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
 
-      {suggestionMode === 'tag' &&
-        availableTags
-          .filter((t) => t.toLowerCase().includes(suggestionQuery))
-          .slice(0, 10)
-          .map((tg, idx) => (
-            <TouchableOpacity
-              key={idx}
-              style={styles.sugChip}
-              onPress={() => handleSelectTagSuggestion(tg)}
-            >
-              <Ionicons name="pricetag-outline" size={12} color="#2563EB" />
-              <Text style={styles.sugChipText}>#{tg}</Text>
-            </TouchableOpacity>
-          ))}
-    </ScrollView>
-  </View>
-)}
+                      {suggestionMode === 'tag' &&
+                        availableTags
+                          .filter((t) => t.toLowerCase().includes(suggestionQuery))
+                          .slice(0, 10)
+                          .map((tg, idx) => (
+                            <TouchableOpacity
+                              key={idx}
+                              style={styles.sugChip}
+                              onPress={() => handleSelectTagSuggestion(tg)}
+                            >
+                              <Ionicons name="pricetag-outline" size={12} color="#2563EB" />
+                              <Text style={styles.sugChipText}>#{tg}</Text>
+                            </TouchableOpacity>
+                          ))}
+                    </ScrollView>
+                  </View>
+                )}
 
                 <Text style={styles.fieldLabel}>Due Date:</Text>
                 <View style={styles.quickDateRow}>
@@ -2390,7 +2521,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
                 )}
               </ScrollView>
 
-             <View style={styles.modalBtnRow}>
+              <View style={styles.modalBtnRow}>
                 <TouchableOpacity
                   style={[styles.modalBtn, styles.modalCancelBtn]}
                   onPress={() => setIsCreateModalVisible(false)}
@@ -2411,7 +2542,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
         </Pressable>
       </Modal>
 
-      {/* Interactive Calendar Modal Grid */}
+      {/* Calendar Modal */}
       <Modal
         visible={isCalendarPickerVisible}
         transparent={true}
@@ -2497,7 +2628,7 @@ export default function FollowupsScreen({ route, navigation }: any) {
         </Pressable>
       </Modal>
 
-      {/* Completed History Vertical Filter Modal */}
+      {/* Completed History Filter Modal */}
       <Modal
         visible={isCompletedFilterModalVisible}
         transparent={true}
@@ -2547,20 +2678,6 @@ export default function FollowupsScreen({ route, navigation }: any) {
           </Pressable>
         </Pressable>
       </Modal>
-      {/* 🌟 PLACE CONFETTI HERE AT THE VERY BOTTOM SO IT BLASTS IN THE FOREGROUND 🌟 */}
-      {showConfetti && (
-        <View style={[StyleSheet.absoluteFill, { zIndex: 9999, pointerEvents: 'none' }]}>
-          <ConfettiCannon
-            ref={confettiRef}
-            count={120}
-            origin={{ x: 200, y: 0 }}
-            autoStart={false}
-            fadeOut={true}
-            fallSpeed={2500}
-            onAnimationEnd={() => setShowConfetti(false)}
-          />
-        </View>
-      )}
     </Animated.View>
   );
 }
@@ -2672,32 +2789,47 @@ const styles = StyleSheet.create({
   },
   cardHeaderRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
   },
   cardHeaderCenter: {
     flex: 1,
     marginRight: 6,
+    flexDirection: 'column',
   },
-  nameRow: {
+  cardHeaderNameColumn: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 4,
+  },
+  tagAndTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  rightBadgeTimeColumn: {
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+  },
+  timeBelowDateText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2563EB',
+    marginTop: 4,
+  },
+  timeTextOverdue: {
+    color: '#DC2626',
+  },
+  timeTextToday: {
+    color: '#D97706',
   },
   checkCircleBtn: {
     marginRight: 8,
+    marginTop: 2,
   },
   typeBadgeText: {
     fontSize: 14,
     fontWeight: '700',
     color: '#0F172A',
-    flexShrink: 1,
-  },
-  contactTagSub: {
-    fontSize: 12,
-    color: '#64748B',
-    fontWeight: '500',
     flexShrink: 1,
   },
   dueBadge: {
@@ -2738,7 +2870,6 @@ const styles = StyleSheet.create({
   completedDatesSubtext: {
     fontSize: 11,
     color: '#94A3B8',
-    marginTop: 4,
   },
   taskCohortContainer: {
     backgroundColor: '#F8FAFC',
@@ -2815,8 +2946,8 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     paddingVertical: 2,
   },
- checklistNameText: {
-    fontSize: 14,          // Increased from 13.5 to 15 for a prominent contact name
+  checklistNameText: {
+    fontSize: 14,
     fontWeight: '700',
     color: '#1E293B',
     marginBottom: 4,
@@ -2829,7 +2960,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-      },
+  },
   checklistPhoneText: {
     fontSize: 13.5,
     color: '#334155',
@@ -2853,10 +2984,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
   },
- smallIconBtn: {
-    width: 34,      // Increased from 28 to 34
-    height: 34,     // Increased from 28 to 34
-    borderRadius: 17, // Half of 34 for a perfect circle
+  smallIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3298,14 +3429,6 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     padding: 0,
   },
-  suggestionsContainer: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 8,
-    padding: 6,
-    marginBottom: 10,
-  },
   sugChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3490,7 +3613,7 @@ const styles = StyleSheet.create({
   modalBtnRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 8,            
+    marginTop: 8,
     marginBottom: 4,
   },
   modalBtn: {
@@ -3647,38 +3770,19 @@ const styles = StyleSheet.create({
     color: '#2563EB',
     fontWeight: '800',
   },
-
-  checklistNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 4,
-  },
-  checklistPrimaryTagBadge: {
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 6,
-    paddingVertical: 1.5,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-  },
-  
   checklistPrimaryTagTouchable: {
     alignSelf: 'flex-start',
-    marginTop: 1,
-    marginBottom: 4,
-    backgroundColor: '#FFFFFF', // Clean white background against the checklist card
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 6,
     paddingVertical: 1.5,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#c4cad7',     // Solid black/dark border to match checklist UI theme
+    borderColor: '#c4cad7',
   },
   checklistPrimaryTagText: {
     fontSize: 11.5,
     fontWeight: '700',
-    color: '#4a4d53',         // Solid black text color
+    color: '#4a4d53',
   },
   floatingSuggestionsContainer: {
     backgroundColor: '#FFFFFF',
@@ -3691,11 +3795,5 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 4,
-  },
-  cardHeaderNameColumn: {
-    flex: 1,
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    gap: 2,
   },
 });
