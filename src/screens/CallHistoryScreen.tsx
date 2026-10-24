@@ -18,7 +18,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
 import { Contact } from '../types';
 
-// Feature Flag: Set to true ONLY when building the final native APK via EAS build
+// Feature Flag: Set to true for your native APK build
 const USE_REAL_CALL_LOGS = true;
 
 interface CallLogItem {
@@ -69,13 +69,11 @@ export default function CallHistoryScreen({ navigation }: any) {
       if (Platform.OS === 'android') {
         const { PermissionsAndroid } = require('react-native');
         
-        // 1. Check if permission is already granted
         const hasPermission = await PermissionsAndroid.check(
           PermissionsAndroid.PERMISSIONS.READ_CALL_LOG
         );
 
         if (!hasPermission) {
-          // 2. Request runtime permission popup safely
           const granted = await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.READ_CALL_LOG,
             {
@@ -93,10 +91,11 @@ export default function CallHistoryScreen({ navigation }: any) {
           }
         }
 
-        // 3. Safely require and load native call logs
-        const CallLog = require('react-native-call-log').default;
+        const CallLogModule = require('react-native-call-log');
+        const CallLog = CallLogModule.default || CallLogModule;
+
         if (!CallLog || typeof CallLog.load !== 'function') {
-          console.warn('CallLog native module is not available.');
+          console.warn('CallLog native module load method not found.');
           return [];
         }
 
@@ -225,14 +224,13 @@ export default function CallHistoryScreen({ navigation }: any) {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, []);
 
-// Clean colored directional text arrows (No backgrounds, exact colors)
   const renderArrowIndicator = (callType: 'incoming' | 'outgoing' | 'missed') => {
     if (callType === 'outgoing') {
-      return <Text style={{ color: '#16A34A', fontSize: 21, fontWeight: '900', marginLeft: 4 }}>↗</Text>; // Green upward-right for called
+      return <Text style={{ color: '#16A34A', fontSize: 21, fontWeight: '900', marginLeft: 4 }}>↗</Text>;
     } else if (callType === 'missed') {
-      return <Text style={{ color: '#DC2626', fontSize: 21, fontWeight: '900', marginLeft: 4 }}>↙</Text>; // Red downward-left for missed
+      return <Text style={{ color: '#DC2626', fontSize: 21, fontWeight: '900', marginLeft: 4 }}>↙</Text>;
     } else {
-      return <Text style={{ color: '#64748B', fontSize: 21, fontWeight: '900', marginLeft: 4 }}>↙</Text>; // Grey downward-left for received
+      return <Text style={{ color: '#64748B', fontSize: 21, fontWeight: '900', marginLeft: 4 }}>↙</Text>;
     }
   };
 
