@@ -67,8 +67,42 @@ export default function CallHistoryScreen({ navigation }: any) {
 
     try {
       if (Platform.OS === 'android') {
+        const { PermissionsAndroid } = require('react-native');
+        
+        // 1. Check if permission is already granted
+        const hasPermission = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.READ_CALL_LOG
+        );
+
+        if (!hasPermission) {
+          // 2. Request runtime permission popup safely
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.READ_CALL_LOG,
+            {
+              title: 'Call Log Permission',
+              message: 'ContactNow needs access to your call logs to display your recent history.',
+              buttonNeutral: 'Ask Me Later',
+              buttonNegative: 'Cancel',
+              buttonPositive: 'OK',
+            }
+          );
+
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            console.warn('Call log permission denied by user.');
+            return [];
+          }
+        }
+
+        // 3. Safely require and load native call logs
         const CallLog = require('react-native-call-log').default;
+        if (!CallLog || typeof CallLog.load !== 'function') {
+          console.warn('CallLog native module is not available.');
+          return [];
+        }
+
         const logs = await CallLog.load(50);
+        if (!logs || !Array.isArray(logs)) return [];
+
         return logs.map((log: any, index: number) => {
           const callDate = new Date(parseInt(log.timestamp, 10));
           const timeStr = callDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
@@ -89,7 +123,7 @@ export default function CallHistoryScreen({ navigation }: any) {
       }
       return [];
     } catch (err) {
-      console.warn('Failed to load native call logs:', err);
+      console.warn('Failed to load native call logs safely:', err);
       return [];
     }
   };
